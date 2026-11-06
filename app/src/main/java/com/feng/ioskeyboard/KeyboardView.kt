@@ -448,8 +448,10 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             val cx = 69f + i * 82.5f
             val sel = query.isEmpty() && i == tab
             if (sel) { pKey.color = cTabSel; c.drawCircle(cx, cy, 38f, pKey) }
-            pTab.alpha = if (sel) 255 else 150; pTab.textSize = 46f
-            c.drawText(TAB_ICONS[i], cx, cy + 16f, pTab)
+            val col = if (sel) cFg else cHint
+            pStroke.color = col; pFill.color = col
+            TabIcons.draw(c, i, cx, cy, pStroke, pFill)
+            pStroke.color = cFg; pFill.color = cFg
         }
     }
 
