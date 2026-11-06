@@ -6,6 +6,10 @@ import android.graphics.*
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextPaint
+import android.text.TextUtils
 import android.util.SparseArray
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -42,6 +46,8 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         fun onCreateSticker()
         fun onOpenSettings()
         fun onLanguage(i: Int)
+        fun onClipText(s: String)
+        fun onClipImage(f: File)
     }
 
     // ---------- warna (tema) ----------
@@ -79,7 +85,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     private var iconDy = 0f
     private var iconSz = 1f
     private var oneHand = 0 // 0 normal, 1 kiri, 2 kanan
-    private val keysCache = arrayOfNulls<List<Key>>(4)
+    private val keysCache = arrayOfNulls<List<Key>>(5)
     private val rf = RectF()
     private val path = Path()
     private val handler = Handler(Looper.getMainLooper())
@@ -130,6 +136,30 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     private val globe: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.ic_globe)
     private val mic: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.ic_mic)
 
+    private val catIds = intArrayOf(R.drawable.emoji_cat_0, R.drawable.emoji_cat_1, R.drawable.emoji_cat_2, R.drawable.emoji_cat_3,
+        R.drawable.emoji_cat_4, R.drawable.emoji_cat_5, R.drawable.emoji_cat_6, R.drawable.emoji_cat_7, R.drawable.emoji_cat_8, R.drawable.emoji_cat_9)
+    private val catBmps = Array(10) { BitmapFactory.decodeResource(resources, catIds[it]) }
+    private val kbEmojiWhite: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.ic_kb_emoji_white)
+    private val kbEmojiBlack: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.ic_kb_emoji_black)
+    private val addLight: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.ic_add_photo_light)
+    private val addDark: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.ic_add_photo_dark)
+    private val pTint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+    // clipboard
+    private var clipTab = 0 // 0 teks, 1 gambar, 2 prompt
+    private var clipItems: List<ClipStore.Item> = emptyList()
+    private val clipThumbs = ConcurrentHashMap<String, Bitmap>()
+    private val clipLoading = HashSet<String>()
+    private var prevItem: ClipStore.Item? = null
+    private var prevT0 = 0L
+    private var blurBmp: Bitmap? = null
+    private var pvLayout: StaticLayout? = null
+    private var pvBitmap: Bitmap? = null
+    private var capturing = false
+    private val pvCard = RectF(); private val pvPin = RectF(); private val pvDel = RectF()
+    private val tp = TextPaint(Paint.ANTI_ALIAS_FLAG)
+    private val layouts = HashMap<Long, StaticLayout>()
+
     init {
         applyTheme(false)
         repo.onChange = {
@@ -167,6 +197,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         val t = prefs.getInt("theme", 0)
         val sysDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         applyTheme(t == 1 || (t == 2 && !sysDark))
+        layouts.clear()
         searchEnabled = prefs.getBoolean("emoji_search", true)
         searchScale = prefs.getInt("search_h", 100) / 100f
         val nhf = prefs.getInt("kb_h", 100) / 100f
@@ -227,7 +258,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             }
             else -> {
                 k += Key("ABC", ABC, 20f, iconCy() - 45f, 150f, 90f, K_PLAIN)
-                k += Key("del", DEL, 937f, tabCy() - 42f, 123f, 84f, K_PLAIN)
+                if (p == 3) k += Key("del", DEL, 937f, tabCy() - 42f, 123f, 84f, K_PLAIN)
                 k += iconKeys().filter { it.code == MIC }
             }
         }
@@ -262,6 +293,10 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     private fun cellW() = if (isStickerTab()) cellH() else 145f
     private fun itemCount(): Int = if (isStickerTab()) stickerFiles.size + 1 else gridItems().size
     private fun maxScroll(): Float {
+        if (page == 4) {
+            val cols = ceil(clipItems.size / clipRows().toFloat())
+            return max(0f, cols * (clipCardW() + 14f) * scale - width + 20f * scale)
+        }
         val cols = ceil(itemCount() / gridRows().toFloat())
         return max(0f, cols * cellW() * scale - width + 20f * scale)
     }
@@ -333,15 +368,20 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             drawEmojiTop(c)
             drawGrid(c, s)
             drawTabs(c)
+        } else if (page == 4) {
+            drawClipPage(c, s)
         } else if (searchMode) {
             drawSearchTop(c)
         } else drawSuggestions(c)
         for (k in keys()) drawKey(c, k, down.indexOfValue(k) >= 0)
         for (i in 0 until down.size()) {
             val k = down.valueAt(i)
-            if (k.kind == K_LETTER && page != 3) drawPopup(c, k)
+            if (k.kind == K_LETTER && page < 3) drawPopup(c, k)
         }
-        if (menuOpen) drawMenu(c)
+        if (!capturing) {
+            if (menuOpen) drawMenu(c)
+            if (prevItem != null) drawPreview(c)
+        }
         c.restore()
         if (oneHand != 0) { c.restore(); drawOneHandButton(c) }
     }
@@ -415,10 +455,10 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
                 val x = GX0 + col * cw - off; val y = top + r * ch
                 if (idx == 0) {
                     pKey.color = cFunc; rf.set(x + 8f, y + 8f, x + cw - 8f, y + ch - 8f); c.drawRoundRect(rf, 28f, 28f, pKey)
-                    pStroke.strokeWidth = 8f
-                    c.drawLine(x + cw / 2 - 28f, y + ch / 2, x + cw / 2 + 28f, y + ch / 2, pStroke)
-                    c.drawLine(x + cw / 2, y + ch / 2 - 28f, x + cw / 2, y + ch / 2 + 28f, pStroke)
-                    pStroke.strokeWidth = 5.5f
+                    val ab = if (light) addLight else addDark
+                    pBmp.alpha = 255; pBmp.colorFilter = null
+                    rf.set(x + cw / 2 - 70f, y + ch / 2 - 70f, x + cw / 2 + 70f, y + ch / 2 + 70f)
+                    c.drawBitmap(ab, null, rf, pBmp)
                 } else {
                     pKey.color = cCell; rf.set(x + 8f, y + 8f, x + cw - 8f, y + ch - 8f); c.drawRoundRect(rf, 28f, 28f, pKey)
                     val b = thumb(stickerFiles[idx - 1])
@@ -444,15 +484,17 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
 
     private fun drawTabs(c: Canvas) {
         val cy = tabCy()
-        for (i in TAB_ICONS.indices) {
+        for (i in 0..9) {
             val cx = 69f + i * 82.5f
             val sel = query.isEmpty() && i == tab
-            if (sel) { pKey.color = cTabSel; c.drawCircle(cx, cy, 38f, pKey) }
-            val col = if (sel) cFg else cHint
-            pStroke.color = col; pFill.color = col
-            TabIcons.draw(c, i, cx, cy, pStroke, pFill)
-            pStroke.color = cFg; pFill.color = cFg
+            if (sel) { pKey.color = cTabSel; c.drawCircle(cx, cy, 40f, pKey) }
+            // kanvas ikon jam 60px (penuh), ikon lain 120px (berpadding): disamakan ke ukuran iOS asli
+            val half = if (i == 1) 22f else 46.8f
+            pTint.colorFilter = PorterDuffColorFilter(if (sel) cFg else cHint, PorterDuff.Mode.SRC_IN)
+            rf.set(cx - half, cy - half, cx + half, cy + half)
+            c.drawBitmap(catBmps[i], null, rf, pTint)
         }
+        pTint.colorFilter = null
     }
 
     private fun drawSuggestions(c: Canvas) {
@@ -572,11 +614,9 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     }
 
     private fun drawSmiley(c: Canvas, cx: Float, cy: Float) {
-        c.drawCircle(cx, cy, 34f, pFill)
-        pKey.color = cFunc
-        rf.set(cx - 15f, cy - 17f, cx - 5f, cy - 1f); c.drawOval(rf, pKey)
-        rf.set(cx + 5f, cy - 17f, cx + 15f, cy - 1f); c.drawOval(rf, pKey)
-        rf.set(cx - 21f, cy - 5f, cx + 21f, cy + 23f); c.drawArc(rf, 0f, 180f, true, pKey)
+        rf.set(cx - 36f, cy - 36f, cx + 36f, cy + 36f)
+        pBmp.alpha = 255; pBmp.colorFilter = null
+        c.drawBitmap(if (light) kbEmojiBlack else kbEmojiWhite, null, rf, pBmp)
     }
 
     private fun drawPopup(c: Canvas, k: Key) {
@@ -596,39 +636,39 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     }
 
     // ---------- menu tekan-tahan globe (seperti iOS) ----------
-    private val MENU_ROW = 116f
+    private fun menuRow(): Float = min(116f, (menuBottom() - 16f - 28f) / 6f)
     private val MENU_L = 16f
     private val MENU_W = 600f
     private fun menuBottom() = iconCy() - 55f * iconSz
-    private fun menuTop() = menuBottom() - (5 * MENU_ROW + 28f)
+    private fun menuTop() = menuBottom() - (6 * menuRow() + 28f)
     private fun menuLangIdx() = prefs.getInt("lang", 0)
 
     private fun drawMenu(c: Canvas) {
-        val top = menuTop()
+        val top = menuTop(); val mr = menuRow()
         if (cShadow != 0) { pKey.color = cShadow; rf.set(MENU_L, top + 4f, MENU_L + MENU_W, menuBottom() + 4f); c.drawRoundRect(rf, 56f, 56f, pKey) }
         pKey.color = cMenuBg
         rf.set(MENU_L, top, MENU_L + MENU_W, menuBottom()); c.drawRoundRect(rf, 56f, 56f, pKey)
-        val labels = arrayOf("Pengaturan Keyboard...", "Indonesia", "English (US)", "Emoji")
+        val labels = arrayOf("Pengaturan Keyboard...", "Indonesia", "English (US)", "Emoji", "Clipboard")
         pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = 44f
-        for (i in 0..3) {
-            val y0 = top + 14f + i * MENU_ROW
+        for (i in 0..4) {
+            val y0 = top + 14f + i * mr
             val sel = (i == 1 && menuLangIdx() == 0) || (i == 2 && menuLangIdx() == 1)
             if (sel || menuHover == i) {
-                pKey.color = cMenuSel; rf.set(MENU_L + 12f, y0 + 6f, MENU_L + MENU_W - 12f, y0 + MENU_ROW - 6f)
-                c.drawRoundRect(rf, (MENU_ROW - 12f) / 2, (MENU_ROW - 12f) / 2, pKey)
+                pKey.color = cMenuSel; rf.set(MENU_L + 12f, y0 + 6f, MENU_L + MENU_W - 12f, y0 + mr - 6f)
+                c.drawRoundRect(rf, (mr - 12f) / 2, (mr - 12f) / 2, pKey)
             }
             pTxt.color = cFg
-            c.drawText(labels[i], MENU_L + 46f, y0 + MENU_ROW / 2 + 15f, pTxt)
+            c.drawText(labels[i], MENU_L + 46f, y0 + mr / 2 + 15f, pTxt)
         }
         pTxt.textAlign = Paint.Align.CENTER
         // baris ikon mode satu tangan: kiri, normal, kanan
-        val y0 = top + 14f + 4 * MENU_ROW
+        val y0 = top + 14f + 5 * mr
         val cw = MENU_W / 3
         for (i in 0..2) {
             val mode = when (i) { 0 -> 1; 1 -> 0; else -> 2 }
             val sel = oneHand == mode
-            val cx = MENU_L + cw * i + cw / 2; val cy = y0 + MENU_ROW / 2
-            if (sel || (menuHover == 4 && menuHoverCell == i)) {
+            val cx = MENU_L + cw * i + cw / 2; val cy = y0 + mr / 2
+            if (sel || (menuHover == 5 && menuHoverCell == i)) {
                 pKey.color = cMenuSel; rf.set(cx - 62f, cy - 46f, cx + 62f, cy + 46f); c.drawRoundRect(rf, 46f, 46f, pKey)
             }
             drawKbIcon(c, cx, cy, i)
@@ -652,8 +692,8 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
 
     private fun menuHit(x: Float, y: Float): Int {
         if (x < MENU_L || x > MENU_L + MENU_W) return -1
-        val r = ((y - menuTop() - 14f) / MENU_ROW).toInt()
-        return if (y >= menuTop() + 14f && r in 0..4) r else -1
+        val r = ((y - menuTop() - 14f) / menuRow()).toInt()
+        return if (y >= menuTop() + 14f && r in 0..5) r else -1
     }
 
     private fun menuAct(row: Int, x: Float) {
@@ -662,7 +702,8 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             1 -> { prefs.edit().putInt("lang", 0).apply(); l.onLanguage(0) }
             2 -> { prefs.edit().putInt("lang", 1).apply(); l.onLanguage(1) }
             3 -> { page = 3; searchMode = false; scrollPx = 0f; if (query.isEmpty() && tab == 0) reloadStickers() }
-            4 -> {
+            4 -> { page = 4; searchMode = false; scrollPx = 0f; scroller.forceFinished(true); reloadClip() }
+            5 -> {
                 val i = ((x - MENU_L) / (MENU_W / 3)).toInt().coerceIn(0, 2)
                 oneHand = when (i) { 0 -> 1; 1 -> 0; else -> 2 }
                 prefs.edit().putInt("onehand", oneHand).apply()
@@ -679,7 +720,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_MOVE -> {
                 menuHover = menuHit(x, y)
-                menuHoverCell = if (menuHover == 4) ((x - MENU_L) / (MENU_W / 3)).toInt().coerceIn(0, 2) else -1
+                menuHoverCell = if (menuHover == 5) ((x - MENU_L) / (MENU_W / 3)).toInt().coerceIn(0, 2) else -1
                 invalidate()
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
@@ -825,6 +866,8 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         val s = scale
 
         if (menuOpen) return handleMenuTouch(e)
+        if (prevItem != null) return handlePreviewTouch(e)
+        if (page == 4 && touchClip(e)) return true
 
         // ---- grid emoji/stiker (satu jari) ----
         if (page == 3) {
@@ -880,7 +923,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val x = e.getX(idx); val y = e.getY(idx)
-                if (page != 3 && y < ky(165f) * s) {
+                if (page < 3 && y < ky(165f) * s) {
                     if (searchMode) {
                         if (y < (20f + 74f * searchScale) * s) { if (x > 960f * s && query.isNotEmpty()) { query = ""; invalidate() } }
                         else {
@@ -915,7 +958,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
                         while (cursorLastX - x > step) { l.onCursorMove(-1); cursorLastX -= step }
                         continue
                     }
-                    if (page == 3 || old.code == DEL || old.code == SPACE || old.code == GLOBE) continue
+                    if (page >= 3 || old.code == DEL || old.code == SPACE || old.code == GLOBE) continue
                     val nk = find(x, y)
                     if (nk != null && nk !== old) { down.put(pid, nk); invalidateKey(old); invalidateKey(nk) }
                 }
@@ -934,6 +977,298 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             MotionEvent.ACTION_CANCEL -> {
                 handler.removeCallbacks(repeatRunnable); handler.removeCallbacks(spaceLong); handler.removeCallbacks(globeLong)
                 repeating = null; down.clear(); cursorMode = false; invalidate()
+            }
+        }
+        return true
+    }
+
+    // =====================================================================
+    // Clipboard (teks biasa, gambar, teks panjang) + pratinjau tekan-tahan
+    // =====================================================================
+    private val srcR = Rect()
+    private val clipPath = Path()
+
+    fun reloadClip() {
+        clipItems = ClipStore.list(context, clipTab)
+        layouts.clear()
+        invalidate()
+    }
+
+    private fun clipTop() = ky(128f)
+    private fun clipBottom() = ky(780f)
+    private fun clipRows() = if (clipTab == 2) 2 else 3
+    private fun clipCardH(): Float { val r = clipRows(); return (clipBottom() - clipTop() - (r - 1) * 12f) / r }
+    private fun clipCardW(): Float = when (clipTab) { 0 -> 340f; 1 -> clipCardH(); else -> 520f }
+
+    private fun clipThumb(it: ClipStore.Item): Bitmap? {
+        val f = ClipStore.imageFile(context, it); val key = f.path
+        clipThumbs[key]?.let { b -> return b }
+        if (clipLoading.add(key)) {
+            exec.execute {
+                try {
+                    val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(key, o)
+                    var ss = 1
+                    while (o.outWidth / ss > 700 || o.outHeight / ss > 700) ss *= 2
+                    BitmapFactory.decodeFile(key, BitmapFactory.Options().apply { inSampleSize = ss })?.let { b -> clipThumbs[key] = b }
+                } catch (_: Exception) {}
+                postInvalidate()
+            }
+        }
+        return null
+    }
+
+    private fun textLayout(it: ClipStore.Item, w: Float, h: Float): StaticLayout {
+        layouts[it.id]?.let { l0 -> return l0 }
+        val size = if (it.type == ClipStore.T_TEXT) 38f else 31f
+        val p2 = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = size; color = cFg }
+        val maxLines = ((h - 40f) / (size * 1.28f)).toInt().coerceAtLeast(1)
+        val lay = StaticLayout.Builder.obtain(it.value, 0, it.value.length, p2, (w - 44f).toInt())
+            .setMaxLines(maxLines).setEllipsize(TextUtils.TruncateAt.END).setLineSpacing(0f, 1.05f)
+            .setAlignment(Layout.Alignment.ALIGN_NORMAL).build()
+        layouts[it.id] = lay
+        return lay
+    }
+
+    private fun drawPinBadge(c: Canvas, cx: Float, cy: Float) {
+        pKey.color = cBlue; c.drawCircle(cx, cy, 17f, pKey)
+        pFill.color = Color.WHITE; pStroke.color = Color.WHITE; pStroke.strokeWidth = 3.4f
+        c.drawCircle(cx, cy - 4f, 5f, pFill)
+        c.drawLine(cx, cy, cx, cy + 9f, pStroke)
+        pFill.color = cFg; pStroke.color = cFg; pStroke.strokeWidth = 5.5f
+    }
+
+    private fun drawClipCard(c: Canvas, it: ClipStore.Item, x: Float, y: Float, w: Float, h: Float) {
+        if (cShadow != 0) { pKey.color = cShadow; rf.set(x, y + 3f, x + w, y + h + 3f); c.drawRoundRect(rf, 30f, 30f, pKey) }
+        pKey.color = cKey; rf.set(x, y, x + w, y + h); c.drawRoundRect(rf, 30f, 30f, pKey)
+        if (it.type == ClipStore.T_IMAGE) {
+            val b = clipThumb(it)
+            if (b != null) {
+                val bw = b.width.toFloat(); val bh = b.height.toFloat()
+                val k = max(w / bw, h / bh)
+                val sw = (w / k).toInt(); val sh = (h / k).toInt()
+                val sx = ((bw - sw) / 2).toInt(); val sy = ((bh - sh) / 2).toInt()
+                srcR.set(sx, sy, sx + sw, sy + sh)
+                clipPath.reset(); clipPath.addRoundRect(x, y, x + w, y + h, 30f, 30f, Path.Direction.CW)
+                c.save(); c.clipPath(clipPath)
+                rf.set(x, y, x + w, y + h); c.drawBitmap(b, srcR, rf, pBmp)
+                c.restore()
+            }
+        } else {
+            val lay = textLayout(it, w, h)
+            c.save(); c.translate(x + 22f, y + 20f); lay.draw(c); c.restore()
+        }
+        if (it.pinned) drawPinBadge(c, x + w - 28f, y + 28f)
+    }
+
+    private fun drawClipPage(c: Canvas, s: Float) {
+        val top = ky(30f); val h = 70f * hf; val sw = 1040f / 3
+        pKey.color = cPill; rf.set(20f, top, 1060f, top + h); c.drawRoundRect(rf, h / 2, h / 2, pKey)
+        pKey.color = if (light) 0xFFFFFFFF.toInt() else cMenuSel
+        rf.set(20f + clipTab * sw + 5f, top + 5f, 20f + (clipTab + 1) * sw - 5f, top + h - 5f)
+        c.drawRoundRect(rf, (h - 10f) / 2, (h - 10f) / 2, pKey)
+        val labels = arrayOf("Teks", "Gambar", "Prompt")
+        pTxt.textSize = 38f
+        for (i in 0..2) { pTxt.color = if (i == clipTab) cFg else cHint; c.drawText(labels[i], 20f + i * sw + sw / 2, top + h / 2 + 13f, pTxt) }
+        pTxt.color = cFg
+
+        val rows = clipRows(); val cw = clipCardW(); val ch = clipCardH(); val tp0 = clipTop()
+        c.save(); c.clipRect(0f, tp0 - 4f, DW, clipBottom() + 6f)
+        val off = scrollPx / s
+        if (clipItems.isEmpty()) {
+            pTxt.color = cHint; pTxt.textSize = 38f
+            val msg = when (clipTab) { 0 -> "Belum ada teks yang disalin"; 1 -> "Belum ada gambar yang disalin"; else -> "Belum ada teks panjang yang disalin" }
+            c.drawText(msg, 540f, tp0 + 250f, pTxt); pTxt.color = cFg
+        }
+        val first = max(0, ((off - 20f) / (cw + 14f)).toInt()); val last = ((off + DW) / (cw + 14f)).toInt() + 1
+        for (col in first..last) for (r in 0 until rows) {
+            val idx = col * rows + r
+            if (idx >= clipItems.size) continue
+            drawClipCard(c, clipItems[idx], 20f + col * (cw + 14f) - off, tp0 + r * (ch + 12f), cw, ch)
+        }
+        c.restore()
+    }
+
+    private fun clipCellAt(px: Float, py: Float): Int {
+        val s = scale; val x = px / s; val y = py / s
+        val cw = clipCardW(); val ch = clipCardH()
+        val fx = x - 20f + scrollPx / s; val fy = y - clipTop()
+        if (fx < 0f || fy < 0f) return -1
+        val col = (fx / (cw + 14f)).toInt(); val row = (fy / (ch + 12f)).toInt()
+        if (fx - col * (cw + 14f) > cw || fy - row * (ch + 12f) > ch || row >= clipRows()) return -1
+        val idx = col * clipRows() + row
+        return if (idx < clipItems.size) idx else -1
+    }
+
+    private var clipId = -1
+    private var clipX0 = 0f
+    private var clipY0 = 0f
+    private var clipScroll0 = 0f
+    private var clipMoved = false
+    private val clipLong = Runnable {
+        if (clipId >= 0 && !clipMoved) {
+            val i = clipCellAt(clipX0, clipY0)
+            if (i >= 0) { clipId = -1; openPreview(clipItems[i]) }
+        }
+    }
+
+    private fun touchClip(e: MotionEvent): Boolean {
+        val idx = e.actionIndex; val id = e.getPointerId(idx); val s = scale
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val x = e.getX(idx); val y = e.getY(idx)
+                if (y < (clipTop() - 6f) * s) {
+                    val i = ((x / s - 20f) / (1040f / 3)).toInt().coerceIn(0, 2)
+                    tap(); clipTab = i; scrollPx = 0f; scroller.forceFinished(true); reloadClip(); return true
+                }
+                if (y >= clipTop() * s && y <= clipBottom() * s && clipId < 0) {
+                    clipId = id; clipX0 = x; clipY0 = y; clipScroll0 = scrollPx; clipMoved = false
+                    scroller.forceFinished(true)
+                    vt?.recycle(); vt = VelocityTracker.obtain(); vt?.addMovement(e)
+                    handler.postDelayed(clipLong, 480)
+                    return true
+                }
+            }
+            MotionEvent.ACTION_MOVE -> if (clipId >= 0) {
+                val pi = e.findPointerIndex(clipId)
+                if (pi >= 0) {
+                    vt?.addMovement(e)
+                    val dx = e.getX(pi) - clipX0
+                    if (abs(dx) > 14f * s) { clipMoved = true; handler.removeCallbacks(clipLong) }
+                    if (clipMoved) { scrollPx = (clipScroll0 - dx).coerceIn(0f, maxScroll()); invalidate() }
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> if (id == clipId) {
+                handler.removeCallbacks(clipLong)
+                vt?.addMovement(e)
+                if (clipMoved) {
+                    vt?.computeCurrentVelocity(1000)
+                    scroller.fling(scrollPx.toInt(), 0, (-(vt?.xVelocity ?: 0f)).toInt(), 0, 0, maxScroll().toInt(), 0, 0)
+                    postInvalidateOnAnimation()
+                } else {
+                    val i = clipCellAt(e.getX(idx), e.getY(idx))
+                    if (i >= 0) {
+                        tap()
+                        val it = clipItems[i]
+                        if (it.type == ClipStore.T_IMAGE) l.onClipImage(ClipStore.imageFile(context, it)) else l.onClipText(it.value)
+                    }
+                }
+                vt?.recycle(); vt = null; clipId = -1
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> { handler.removeCallbacks(clipLong); clipId = -1 }
+        }
+        return false
+    }
+
+    // ---- pratinjau (popup sedang + latar blur) ----
+    private fun captureBlur(): Bitmap? = try {
+        val k = 8
+        val bmp = Bitmap.createBitmap(max(1, width / k), max(1, height / k), Bitmap.Config.ARGB_8888)
+        val cv = Canvas(bmp); cv.scale(1f / k, 1f / k)
+        capturing = true; draw(cv); capturing = false
+        bmp
+    } catch (_: Throwable) { capturing = false; null }
+
+    private fun openPreview(it: ClipStore.Item) {
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        blurBmp = captureBlur()
+        pvLayout = null; pvBitmap = null
+        val hd = height / scale
+        val cardW: Float; val cardH: Float
+        if (it.type == ClipStore.T_IMAGE) {
+            val f = ClipStore.imageFile(context, it)
+            val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(f.path, o)
+            var ss = 1; while (o.outWidth / ss > 1000 || o.outHeight / ss > 1000) ss *= 2
+            pvBitmap = BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = ss })
+            val b = pvBitmap
+            val bw = (b?.width ?: 400).toFloat(); val bh = (b?.height ?: 300).toFloat()
+            val k = min(600f / bw, 400f / bh)
+            cardW = bw * k + 28f; cardH = bh * k + 28f
+        } else {
+            val size = if (it.type == ClipStore.T_TEXT) 44f else 36f
+            val p2 = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = size; color = cFg }
+            val maxLines = if (it.type == ClipStore.T_TEXT) 6 else 9
+            val lay = StaticLayout.Builder.obtain(it.value, 0, it.value.length, p2, 680)
+                .setMaxLines(maxLines).setEllipsize(TextUtils.TruncateAt.END).setLineSpacing(0f, 1.08f).build()
+            pvLayout = lay
+            cardW = 740f; cardH = min(lay.height + 64f, 520f)
+        }
+        val block = cardH + 24f + 208f
+        val top = max(24f, (hd - block) / 2 - 10f)
+        pvCard.set(540f - cardW / 2, top, 540f + cardW / 2, top + cardH)
+        pvPin.set(540f - 230f, pvCard.bottom + 24f, 540f + 230f, pvCard.bottom + 24f + 104f)
+        pvDel.set(540f - 230f, pvPin.bottom, 540f + 230f, pvPin.bottom + 104f)
+        prevItem = it; prevT0 = SystemClock.uptimeMillis()
+        invalidate()
+    }
+
+    private fun closePreview() {
+        prevItem = null; blurBmp = null; pvLayout = null; pvBitmap = null
+        reloadClip()
+    }
+
+    private fun drawPreview(c: Canvas) {
+        val it = prevItem ?: return
+        val hd = height / scale
+        val t0 = ((SystemClock.uptimeMillis() - prevT0) / 190f).coerceIn(0f, 1f)
+        val e = t0 * t0 * (3f - 2f * t0)
+        blurBmp?.let { b -> rf.set(0f, 0f, DW, hd); pBmp.alpha = (255 * e).toInt(); c.drawBitmap(b, null, rf, pBmp); pBmp.alpha = 255 }
+        pKey.color = if (light) Color.argb((110 * e).toInt(), 255, 255, 255) else Color.argb((150 * e).toInt(), 0, 0, 0)
+        c.drawRect(0f, 0f, DW, hd, pKey)
+
+        val midY = (pvCard.top + pvDel.bottom) / 2
+        c.saveLayerAlpha(0f, 0f, DW, hd, (255 * e).toInt())
+        val sc = 0.92f + 0.08f * e
+        c.scale(sc, sc, 540f, midY)
+        // kartu isi
+        if (cShadow != 0) { pKey.color = 0x40000000; rf.set(pvCard.left, pvCard.top + 6f, pvCard.right, pvCard.bottom + 6f); c.drawRoundRect(rf, 44f, 44f, pKey) }
+        pKey.color = cMenuBg; c.drawRoundRect(pvCard, 44f, 44f, pKey)
+        if (it.type == ClipStore.T_IMAGE) {
+            pvBitmap?.let { b ->
+                rf.set(pvCard.left + 14f, pvCard.top + 14f, pvCard.right - 14f, pvCard.bottom - 14f)
+                clipPath.reset(); clipPath.addRoundRect(rf, 32f, 32f, Path.Direction.CW)
+                c.save(); c.clipPath(clipPath); c.drawBitmap(b, null, rf, pBmp); c.restore()
+            }
+        } else {
+            pvLayout?.let { lay -> c.save(); c.translate(pvCard.left + 30f, pvCard.top + 32f); lay.draw(c); c.restore() }
+        }
+        // menu aksi
+        rf.set(pvPin.left, pvPin.top, pvPin.right, pvDel.bottom)
+        pKey.color = cMenuBg; c.drawRoundRect(rf, 44f, 44f, pKey)
+        pKey.color = cDiv; c.drawRect(pvPin.left + 30f, pvPin.bottom - 1f, pvPin.right - 30f, pvPin.bottom + 1f, pKey)
+        pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = 42f
+        pTxt.color = cFg
+        c.drawText(if (it.pinned) "Lepas sematan" else "Sematkan", pvPin.left + 44f, pvPin.centerY() + 15f, pTxt)
+        val red = if (light) 0xFFFF3B30.toInt() else 0xFFFF453A.toInt()
+        pTxt.color = red
+        c.drawText("Hapus", pvDel.left + 44f, pvDel.centerY() + 15f, pTxt)
+        pTxt.textAlign = Paint.Align.CENTER; pTxt.color = cFg
+        // ikon pin & tempat sampah
+        val px = pvPin.right - 62f; val py = pvPin.centerY()
+        pStroke.strokeWidth = 4f; pFill.color = cFg
+        c.drawCircle(px, py - 7f, 8f, pFill); c.drawLine(px, py - 1f, px, py + 14f, pStroke)
+        val tx = pvDel.right - 62f; val ty = pvDel.centerY()
+        pStroke.color = red
+        c.drawLine(tx - 13f, ty - 8f, tx + 13f, ty - 8f, pStroke); c.drawLine(tx - 5f, ty - 13f, tx + 5f, ty - 13f, pStroke)
+        rf.set(tx - 10f, ty - 5f, tx + 10f, ty + 15f); c.drawRoundRect(rf, 4f, 4f, pStroke)
+        pStroke.color = cFg; pStroke.strokeWidth = 5.5f
+        c.restore()
+        if (t0 < 1f) postInvalidateOnAnimation()
+    }
+
+    private fun handlePreviewTouch(e: MotionEvent): Boolean {
+        val it = prevItem ?: return true
+        if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_POINTER_UP) {
+            val idx = e.actionIndex
+            val x = e.getX(idx) / scale; val y = e.getY(idx) / scale
+            when {
+                pvPin.contains(x, y) -> { ClipStore.togglePin(context, it.id); tap(); closePreview() }
+                pvDel.contains(x, y) -> { ClipStore.delete(context, it.id); tap(); closePreview() }
+                pvCard.contains(x, y) -> {}
+                else -> closePreview()
             }
         }
         return true

@@ -2,76 +2,78 @@ package com.feng.ioskeyboard
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
-import android.view.Gravity
 import android.view.inputmethod.InputMethodManager
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.RadioButton
-import android.widget.RadioGroup
-import android.widget.ScrollView
-import android.widget.SeekBar
-import android.widget.Switch
 import android.widget.TextView
 
 class SetupActivity : Activity() {
+    private lateinit var vEnable: TextView
+    private lateinit var vPick: TextView
+    private lateinit var vMic: TextView
+
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        val pal = palette()
+        val ui = Screen(this, pal)
         val pf = getSharedPreferences("kb", Context.MODE_PRIVATE)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
-            setBackgroundColor(Color.parseColor("#191919")); setPadding(60, 60, 60, 80)
-        }
-        fun lp() = LinearLayout.LayoutParams(-1, -2).apply { topMargin = 28 }
-        fun label(t: String) = root.addView(TextView(this).apply { text = t; setTextColor(Color.WHITE) }, lp())
-        fun btn(t: String, a: () -> Unit) = root.addView(Button(this).apply { text = t; setOnClickListener { a() } }, lp())
-        fun sw(t: String, key: String, def: Boolean = true) = root.addView(Switch(this).apply {
-            text = t; setTextColor(Color.WHITE); isChecked = pf.getBoolean(key, def)
-            setOnCheckedChangeListener { _, v -> pf.edit().putBoolean(key, v).apply() }
-        }, lp())
-        // seekbar dengan rentang min..max, nilai disimpan sebagai int
-        fun bar(t: String, key: String, min: Int, max: Int, def: Int) {
-            val tv = TextView(this).apply { setTextColor(Color.WHITE) }
-            fun show(v: Int) { tv.text = "$t: $v" }
-            val cur = pf.getInt(key, def); show(cur)
-            root.addView(tv, lp())
-            root.addView(SeekBar(this).apply {
-                this.max = max - min; progress = cur - min
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(s: SeekBar?, p: Int, u: Boolean) { pf.edit().putInt(key, min + p).apply(); show(min + p) }
-                    override fun onStartTrackingTouch(s: SeekBar?) {}
-                    override fun onStopTrackingTouch(s: SeekBar?) {}
-                })
-            }, LinearLayout.LayoutParams(-1, -2))
-        }
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
 
-        root.addView(TextView(this).apply { text = "iOS Keyboard"; textSize = 28f; setTextColor(Color.WHITE); gravity = Gravity.CENTER })
-        btn("1. Aktifkan keyboard") { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
-        btn("2. Pilih keyboard") { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker() }
-        btn("3. Izinkan mikrofon") { requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1) }
-        btn("4. Buat / kelola stiker") { startActivity(Intent(this, StickerActivity::class.java)) }
+        ui.title("Keyboard", "iOS Keyboard untuk Android")
 
-        label("Tema keyboard")
-        root.addView(RadioGroup(this).apply {
-            val names = arrayOf("Gelap", "Terang (iOS 27)", "Ikut sistem")
-            for (i in names.indices) addView(RadioButton(context).apply { id = 100 + i; text = names[i]; setTextColor(Color.WHITE) })
-            check(100 + pf.getInt("theme", 0))
-            setOnCheckedChangeListener { _, id -> pf.edit().putInt("theme", id - 100).apply() }
-        }, lp())
+        ui.section("Mulai")
+        vEnable = ui.valueText(""); vPick = ui.valueText(""); vMic = ui.valueText("")
+        ui.card(
+            ui.navRow("Aktifkan keyboard", vEnable) { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) },
+            ui.navRow("Pilih keyboard", vPick) { imm.showInputMethodPicker() },
+            ui.navRow("Izinkan mikrofon", vMic) { requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1) },
+            ui.navRow("Stiker") { startActivity(Intent(this, StickerActivity::class.java)) }
+        )
 
-        sw("Suara ketik", "sound"); sw("Getar saat mengetik", "haptic")
-        sw("Koreksi otomatis", "autocorrect")
-        sw("Pencarian emoji", "emoji_search")
-        sw("Bar bawah ikut warna keyboard", "nav_follow")
-        bar("Tinggi kolom pencarian emoji (%)", "search_h", 70, 120, 100)
-        bar("Tinggi keyboard (%)", "kb_h", 85, 110, 100)
-        bar("Posisi ikon globe & mic (negatif = naik, positif = turun)", "icon_y", -60, 60, 0)
-        bar("Ukuran ikon globe & mic (%)", "icon_sz", 60, 140, 100)
-        label("Perubahan berlaku saat keyboard dibuka lagi.")
-        setContentView(ScrollView(this).apply { addView(root); setBackgroundColor(Color.parseColor("#191919")) })
+        ui.section("Tampilan")
+        ui.card(
+            ui.segmentRow("Tema", arrayOf("Gelap", "Terang", "Sistem"), pf.getInt("theme", 0)) { pf.edit().putInt("theme", it).apply() },
+            ui.sliderRow("Tinggi keyboard", pf, "kb_h", 85, 110, 100, "%"),
+            ui.sliderRow("Tinggi kolom pencarian emoji", pf, "search_h", 70, 120, 100, "%"),
+            ui.sliderRow("Posisi ikon globe & mic", pf, "icon_y", -60, 60, 0),
+            ui.sliderRow("Ukuran ikon globe & mic", pf, "icon_sz", 60, 140, 100, "%")
+        )
+        ui.footer("Posisi ikon: nilai negatif menaikkan, positif menurunkan. Perubahan berlaku saat keyboard dibuka lagi.")
+
+        ui.section("Mengetik")
+        ui.card(
+            ui.switchRow("Suara ketik", pf, "sound"),
+            ui.switchRow("Getar saat mengetik", pf, "haptic"),
+            ui.switchRow("Koreksi otomatis", pf, "autocorrect"),
+            ui.switchRow("Pencarian emoji", pf, "emoji_search"),
+            ui.switchRow("Bar bawah ikut warna keyboard", pf, "nav_follow")
+        )
+
+        ui.section("Clipboard")
+        ui.card(
+            ui.switchRow("Simpan riwayat clipboard", pf, "clip_on"),
+            ui.actionRow("Hapus riwayat", pal.red) {
+                AlertDialog.Builder(this)
+                    .setTitle("Hapus riwayat clipboard?")
+                    .setMessage("Item yang disematkan tidak ikut dihapus.")
+                    .setPositiveButton("Hapus") { _, _ -> ClipStore.clearUnpinned(this) }
+                    .setNegativeButton("Batal", null).show()
+            }
+        )
+        ui.footer("Riwayat clipboard dan kata yang kamu ketik hanya disimpan di perangkat ini.")
+        ui.show()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_INPUT_METHODS) ?: ""
+        val current = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD) ?: ""
+        vEnable.text = if (enabled.contains(packageName)) "Aktif" else "Belum"
+        vPick.text = if (current.contains(packageName)) "Dipakai" else ""
+        vMic.text = if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) "Diizinkan" else "Belum"
     }
 }

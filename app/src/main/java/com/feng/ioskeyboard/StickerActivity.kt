@@ -6,47 +6,45 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
-import android.text.Editable
-import android.text.TextWatcher
 import android.view.Gravity
-import android.widget.*
+import android.view.View
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.TextView
+import android.widget.Toast
 
 /** Buat stiker dari galeri, atau terima gambar yang dibagikan (Share) dari WhatsApp/Telegram/dll. */
 class StickerActivity : Activity() {
     private var src: Uri? = null
     private var preview: Bitmap? = null
+    private var caption = ""
+    private var round = false
     private lateinit var img: ImageView
-    private lateinit var cap: EditText
-    private lateinit var round: CheckBox
     private lateinit var info: TextView
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         if (handleShare(intent)) return
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
-            setBackgroundColor(Color.parseColor("#191919")); setPadding(40, 60, 40, 40)
-        }
-        fun lp(h: Int = -2) = LinearLayout.LayoutParams(-1, h).apply { topMargin = 24 }
-        root.addView(TextView(this).apply { text = "Buat / simpan stiker"; textSize = 24f; setTextColor(Color.WHITE); gravity = Gravity.CENTER })
-        root.addView(Button(this).apply { text = "Pilih gambar dari galeri"; setOnClickListener { pick() } }, lp())
-        img = ImageView(this).apply { setBackgroundColor(Color.parseColor("#2A2A2A")); scaleType = ImageView.ScaleType.FIT_CENTER }
-        root.addView(img, lp(700))
-        cap = EditText(this).apply {
-            hint = "Teks stiker (opsional)"; setTextColor(Color.WHITE); setHintTextColor(Color.GRAY)
-            addTextChangedListener(object : TextWatcher {
-                override fun afterTextChanged(s: Editable?) { rebuild() }
-                override fun beforeTextChanged(s: CharSequence?, a: Int, c: Int, d: Int) {}
-                override fun onTextChanged(s: CharSequence?, a: Int, c: Int, d: Int) {}
-            })
-        }
-        root.addView(cap, lp())
-        round = CheckBox(this).apply { text = "Potong membulat"; setTextColor(Color.WHITE); setOnCheckedChangeListener { _, _ -> rebuild() } }
-        root.addView(round, lp())
-        root.addView(Button(this).apply { text = "Simpan stiker"; setOnClickListener { save() } }, lp())
-        info = TextView(this).apply { setTextColor(Color.LTGRAY); gravity = Gravity.CENTER; text = "Tersimpan: ${StickerStore.list(this@StickerActivity).size} stiker.\nTips: dari WhatsApp/Telegram, tekan lama gambar stiker > Bagikan > pilih aplikasi ini." }
-        root.addView(info, lp())
-        setContentView(ScrollView(this).apply { addView(root); setBackgroundColor(Color.parseColor("#191919")) })
+        val pal = palette()
+        val ui = Screen(this, pal)
+        ui.title("Stiker", "Buat stiker dari gambar apa saja")
+
+        ui.section("Gambar")
+        img = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER; setPadding(dp(12f).toInt(), dp(12f).toInt(), dp(12f).toInt(), dp(12f).toInt()) }
+        val frame = FrameLayout(this)
+        frame.addView(img, FrameLayout.LayoutParams(-1, dp(260f).toInt()))
+        ui.rawCard(frame)
+        ui.addRaw(android.widget.Space(this).apply { minimumHeight = dp(14f).toInt() }, 0f)
+        ui.card(ui.navRow("Pilih dari galeri") { pick() })
+
+        ui.section("Pengaturan")
+        ui.card(
+            ui.inputRow("Teks pada stiker (opsional)") { caption = it; rebuild() },
+            ui.toggleRow("Potong membulat", false) { round = it; rebuild() }
+        )
+        ui.primaryButton("Simpan stiker") { save() }
+        info = ui.footer("Tersimpan: ${StickerStore.list(this).size} stiker. Dari WhatsApp atau Telegram: tekan lama gambar stiker, pilih Bagikan, lalu pilih aplikasi ini.")
+        ui.show()
     }
 
     @Suppress("DEPRECATION")
@@ -68,13 +66,14 @@ class StickerActivity : Activity() {
         startActivityForResult(Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), 7)
     }
 
+    @Deprecated("Deprecated in Java")
     override fun onActivityResult(r: Int, res: Int, d: Intent?) {
         if (r == 7 && res == RESULT_OK) { src = d?.data; rebuild() }
     }
 
     private fun rebuild() {
         val s = src ?: return
-        preview = try { StickerStore.make(this, s, cap.text.toString(), round.isChecked) } catch (_: Exception) { null }
+        preview = try { StickerStore.make(this, s, caption, round) } catch (_: Exception) { null }
         img.setImageBitmap(preview)
     }
 

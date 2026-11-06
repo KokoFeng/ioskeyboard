@@ -19,6 +19,7 @@ import android.speech.SpeechRecognizer
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.net.Uri
 import android.widget.Toast
 import androidx.core.view.inputmethod.EditorInfoCompat
@@ -39,12 +40,48 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
     private var autoCorrect = true
     private var sr: SpeechRecognizer? = null
     private var listening = false
+    private var cm: ClipboardManager? = null
+    private val clipListener = ClipboardManager.OnPrimaryClipChangedListener { captureClip() }
 
     private val learnFile get() = File(filesDir, "learn.txt")
 
     override fun onCreate() {
         super.onCreate()
         loadPredictor()
+        cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        try { cm?.addPrimaryClipChangedListener(clipListener) } catch (_: Exception) {}
+    }
+
+    // riwayat clipboard (hanya disimpan lokal; klip bertanda sensitif diabaikan)
+    private fun captureClip() {
+        try {
+            if (!getSharedPreferences("kb", Context.MODE_PRIVATE).getBoolean("clip_on", true)) return
+            val clip = cm?.primaryClip ?: return
+            val d = clip.description
+            if (Build.VERSION.SDK_INT >= 33 && d.extras?.getBoolean("android.content.extra.IS_SENSITIVE", false) == true) return
+            if (ClipStore.capture(this, clip) && ::kv.isInitialized) kv.reloadClip()
+        } catch (_: Exception) {}
+    }
+
+    override fun onClipText(s: String) {
+        val ic = currentInputConnection ?: return
+        lastOwnEdit = SystemClock.uptimeMillis()
+        started = true
+        ic.commitText(s, 1)
+        finishWord(); resync(); refresh()
+    }
+
+    override fun onClipImage(f: File) {
+        val ei = currentInputEditorInfo ?: return
+        val ic = currentInputConnection ?: return
+        val ok = EditorInfoCompat.getContentMimeTypes(ei).any { ClipDescription.compareMimeTypes("image/png", it) }
+        if (!ok) { Toast.makeText(this, "Aplikasi ini tidak mendukung gambar dari keyboard", Toast.LENGTH_SHORT).show(); return }
+        val uri: Uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", f)
+        var flags = 0
+        if (Build.VERSION.SDK_INT >= 25) flags = InputConnectionCompat.INPUT_CONTENT_GRANT_READ_URI_PERMISSION
+        else grantUriPermission(ei.packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val info = InputContentInfoCompat(uri, ClipDescription("gambar", arrayOf("image/png")), null)
+        InputConnectionCompat.commitContent(ic, ei, info, flags, null)
     }
 
     private fun loadPredictor() {
@@ -79,6 +116,7 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onDestroy() {
+        try { cm?.removePrimaryClipChangedListener(clipListener) } catch (_: Exception) {}
         pred.save(learnFile)
         try { sr?.destroy() } catch (_: Exception) {}
         if (::kv.isInitialized) kv.release()
@@ -133,6 +171,7 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
         kv.returnLabel = "return"
         if (cls == InputType.TYPE_CLASS_NUMBER || cls == InputType.TYPE_CLASS_PHONE) kv.setNumberPage() else kv.resetPage()
         applyPrefs()
+        captureClip()
         started = false
         kv.reloadStickers()
         word.setLength(0); prevWord = null
