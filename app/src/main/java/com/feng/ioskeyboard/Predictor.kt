@@ -1,5 +1,7 @@
 package com.feng.ioskeyboard
 
+import java.io.File
+
 /**
  * Prediksi ringan: kamus kata + frekuensi (urutan = peringkat), bigram kecil, dan
  * kata yang dipelajari dari ketikan user. Pencarian lewat daftar terurut + binary search,
@@ -13,9 +15,12 @@ class Predictor(words: List<String>) {
     private val learned = HashMap<String, Int>()
     private val bigram = HashMap<String, HashMap<String, Int>>()
 
+    @Volatile var dirty = false
+
     fun learn(prev: String?, word: String) {
         val w = word.lowercase()
         if (w.length < 2) return
+        dirty = true
         learned[w] = (learned[w] ?: 0) + 1
         if (!prev.isNullOrEmpty()) {
             bigram.getOrPut(prev.lowercase()) { HashMap() }.let { it[w] = (it[w] ?: 0) + 1 }
@@ -46,11 +51,40 @@ class Predictor(words: List<String>) {
         return out
     }
 
+    /** Kata yang paling sering diketik pengguna (minimal 2 kali). */
+    fun topLearned(n: Int): List<String> =
+        learned.entries.filter { it.value >= 2 }.sortedByDescending { it.value }.take(n).map { it.key }
+
+    fun save(f: File) {
+        if (!dirty) return
+        try {
+            val sb = StringBuilder()
+            for ((w, c) in learned.entries.sortedByDescending { it.value }.take(4000)) sb.append("W\t").append(w).append('\t').append(c).append('\n')
+            var n = 0
+            for ((p, m) in bigram) for ((w, c) in m) { if (c >= 2 && n < 6000) { sb.append("B\t").append(p).append('\t').append(w).append('\t').append(c).append('\n'); n++ } }
+            f.writeText(sb.toString())
+            dirty = false
+        } catch (_: Exception) {}
+    }
+
+    fun load(f: File) {
+        try {
+            if (!f.exists()) return
+            f.forEachLine { line ->
+                val p = line.split('\t')
+                if (p[0] == "W" && p.size == 3) learned[p[1]] = p[2].toIntOrNull() ?: 1
+                else if (p[0] == "B" && p.size == 4) bigram.getOrPut(p[1]) { HashMap() }[p[2]] = p[3].toIntOrNull() ?: 1
+            }
+        } catch (_: Exception) {}
+    }
+
     /** Saran kata berikutnya setelah spasi. */
     fun nextWord(prev: String?, max: Int = 3): List<String> {
         val bi = prev?.let { bigram[it.lowercase()] }
         val out = ArrayList<String>()
         if (bi != null) bi.entries.sortedByDescending { it.value }.forEach { if (out.size < max) out.add(it.key) }
+        // kata yang paling sering diketik pengguna
+        if (out.size < max) for (w in topLearned(max + 3)) { if (out.size >= max) break; if (w !in out) out.add(w) }
         for (d in DEFAULT_START) { if (out.size >= max) break; if (d !in out) out.add(d) }
         return out
     }

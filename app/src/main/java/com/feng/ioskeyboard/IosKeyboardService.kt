@@ -40,11 +40,21 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
     private var sr: SpeechRecognizer? = null
     private var listening = false
 
+    private val learnFile get() = File(filesDir, "learn.txt")
+
     override fun onCreate() {
         super.onCreate()
+        loadPredictor()
+    }
+
+    private fun loadPredictor() {
+        val lang = getSharedPreferences("kb", Context.MODE_PRIVATE).getInt("lang", 0)
         Thread {
             val id = readWords("words_id.txt"); val en = readWords("words_en.txt")
-            pred = Predictor(interleave(id, en))
+            // bahasa terpilih diutamakan, bahasa lain tetap dikenali (tidak dianggap salah ketik)
+            val p = Predictor(if (lang == 0) id + en else en + id)
+            p.load(learnFile)
+            pred = p
         }.start()
     }
 
@@ -52,14 +62,24 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
         assets.open(f).bufferedReader().readLines().map { it.trim() }.filter { it.isNotEmpty() }
     } catch (_: Exception) { emptyList() }
 
-    // dua bahasa digabung bergantian supaya peringkat frekuensi adil
-    private fun interleave(a: List<String>, b: List<String>): List<String> {
-        val out = ArrayList<String>(a.size + b.size)
-        for (i in 0 until maxOf(a.size, b.size)) { if (i < a.size) out.add(a[i]); if (i < b.size) out.add(b[i]) }
-        return out
+    override fun onFinishInput() {
+        super.onFinishInput()
+        pred.save(learnFile)
+    }
+
+    override fun onOpenSettings() {
+        startActivity(Intent(this, SetupActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    override fun onLanguage(i: Int) {
+        pred.save(learnFile)
+        loadPredictor()
+        word.setLength(0)
+        refresh()
     }
 
     override fun onDestroy() {
+        pred.save(learnFile)
         try { sr?.destroy() } catch (_: Exception) {}
         if (::kv.isInitialized) kv.release()
         super.onDestroy()
@@ -81,11 +101,16 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
         if (::kv.isInitialized) kv.loadPrefs()
         try {
             val w = window?.window ?: return
-            val col = if (pf.getBoolean("nav_follow", true)) 0xFF191919.toInt() else Color.BLACK
+            val follow = pf.getBoolean("nav_follow", true)
+            val isLight = ::kv.isInitialized && kv.isLight()
+            val col = if (follow && ::kv.isInitialized) kv.bgColor() else (if (isLight) Color.WHITE else Color.BLACK)
             w.navigationBarColor = col
             if (Build.VERSION.SDK_INT >= 28) w.navigationBarDividerColor = col
-            if (Build.VERSION.SDK_INT >= 26) w.decorView.systemUiVisibility =
-                w.decorView.systemUiVisibility and View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+            if (Build.VERSION.SDK_INT >= 26) {
+                val f = w.decorView.systemUiVisibility
+                w.decorView.systemUiVisibility = if (isLight) f or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                    else f and View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+            }
         } catch (_: Exception) {}
     }
 

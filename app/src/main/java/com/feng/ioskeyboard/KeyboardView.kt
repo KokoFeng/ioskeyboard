@@ -1,9 +1,11 @@
 package com.feng.ioskeyboard
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.*
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.SparseArray
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -21,7 +23,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Keyboard ala iPhone (mode gelap) yang digambar langsung dengan Canvas.
+ * Keyboard ala iPhone (gelap / terang) yang digambar langsung dengan Canvas.
  * Koordinat desain mengikuti gambar referensi 1080 x 914.
  */
 class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
@@ -38,18 +40,17 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         fun onCursorMove(dir: Int)
         fun onSticker(f: File)
         fun onCreateSticker()
+        fun onOpenSettings()
+        fun onLanguage(i: Int)
     }
 
-    // ---------- warna (diambil dari gambar referensi) ----------
-    private val cBg = 0xFF191919.toInt()
-    private val cKey = 0xFF3B3B3B.toInt()
-    private val cKeyDown = 0xFF646464.toInt()
-    private val cPopup = 0xFF6A6A6A.toInt()
-    private val cDiv = 0xFF424242.toInt()
-    private val cSug = 0xFFB0B0B0.toInt()
-    private val cBlue = 0xFF0464DF.toInt()
-    private val cBlueDown = 0xFF3A86E8.toInt()
-    private val cHint = 0xFF8E8E93.toInt()
+    // ---------- warna (tema) ----------
+    private var cBg = 0; private var cKey = 0; private var cFunc = 0; private var cFuncDown = 0
+    private var cPopup = 0; private var cDiv = 0; private var cSug = 0; private var cBlue = 0
+    private var cBlueDown = 0; private var cHint = 0; private var cFg = Color.WHITE; private var cShadow = 0
+    private var cMenuBg = 0; private var cMenuSel = 0; private var cCell = 0; private var cTabSel = 0
+    private var cPill = 0
+    private var light = false
 
     companion object {
         const val SHIFT = -1; const val DEL = -2; const val NUM = -3; const val ABC = -4
@@ -57,7 +58,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         const val GLOBE = -9; const val MIC = -10
         const val K_LETTER = 0; const val K_FUNC = 1; const val K_ICON = 2; const val K_PLAIN = 4
         const val DW = 1080f; const val DH = 914f
-        private const val HF = 0.92f // faktor tinggi (1.0 = persis gambar)
+        private const val ONE_F = 0.82f // lebar keyboard mode satu tangan
         private val TAB_ICONS = arrayOf("🌙", "🕘", "😀", "🐶", "🍎", "⚽", "🚗", "💡", "❤️", "🏁")
     }
 
@@ -74,6 +75,10 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     private var sugBold = false
     private var bottomInset = 0
     private var scale = 1f
+    private var hf = 1f
+    private var iconDy = 0f
+    private var iconSz = 1f
+    private var oneHand = 0 // 0 normal, 1 kiri, 2 kanan
     private val keysCache = arrayOfNulls<List<Key>>(4)
     private val rf = RectF()
     private val path = Path()
@@ -90,11 +95,6 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     private var searchScale = 1f
     private var lastTapAt = 0L
     private var tapGap = 220f
-    // animasi fade saran kata
-    private var fromSug = arrayOf("", "", "")
-    private var curSug = arrayOf("", "", "")
-    private var fadeStart = 0L
-    private var fadeDur = 120L
     private var query = ""
     private var searchMode = false
     private var scrollPx = 0f
@@ -105,42 +105,103 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     private val loading = HashSet<String>()
     private val exec = Executors.newSingleThreadExecutor()
 
+    // animasi fade saran kata
+    private var fromSug = arrayOf("", "", "")
+    private var curSug = arrayOf("", "", "")
+    private var fadeStart = 0L
+    private var fadeDur = 120L
+
+    // menu tekan-tahan globe
+    private var menuOpen = false
+    private var menuHover = -1
+    private var menuHoverCell = -1
+    private var menuFresh = true
+
     private val pKey = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val pTxt = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textAlign = Paint.Align.CENTER; typeface = Typeface.create("sans-serif", Typeface.NORMAL) }
+    private val pTxt = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = Typeface.create("sans-serif", Typeface.NORMAL) }
     private val pEmoji = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
     private val pTab = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.CENTER
         colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) })
     }
-    private val pStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 5.5f; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
-    private val pFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val pStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 5.5f; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
+    private val pFill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val pBmp = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val globe: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.ic_globe)
     private val mic: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.ic_mic)
 
     init {
+        applyTheme(false)
         repo.onChange = {
             repo.face?.let { pEmoji.typeface = it; pTab.typeface = it }
             invalidate()
         }
         repo.load()
         if (repo.recents().isNotEmpty()) tab = 1
+        loadPrefs()
+    }
+
+    // ---------- tema ----------
+    private fun applyTheme(isLight: Boolean) {
+        light = isLight
+        if (!isLight) {
+            cBg = 0xFF191919.toInt(); cKey = 0xFF3B3B3B.toInt(); cFunc = 0xFF3B3B3B.toInt(); cFuncDown = 0xFF646464.toInt()
+            cPopup = 0xFF6A6A6A.toInt(); cDiv = 0xFF424242.toInt(); cSug = 0xFFB0B0B0.toInt()
+            cBlue = 0xFF0464DF.toInt(); cBlueDown = 0xFF3A86E8.toInt(); cHint = 0xFF8E8E93.toInt(); cFg = Color.WHITE
+            cShadow = 0; cMenuBg = 0xFF3A3A3C.toInt(); cMenuSel = 0xFF59595D.toInt(); cCell = 0xFF262626.toInt()
+            cTabSel = 0xFF4A4A4A.toInt(); cPill = 0xFF3B3B3B.toInt()
+        } else {
+            cBg = 0xFFD2D4DB.toInt(); cKey = 0xFFFFFFFF.toInt(); cFunc = 0xFFADB2BD.toInt(); cFuncDown = 0xFFFFFFFF.toInt()
+            cPopup = 0xFFFFFFFF.toInt(); cDiv = 0xFFB7B9C0.toInt(); cSug = 0xFF6E6E73.toInt()
+            cBlue = 0xFF007AFF.toInt(); cBlueDown = 0xFF4DA0FF.toInt(); cHint = 0xFF6E6E73.toInt(); cFg = Color.BLACK
+            cShadow = 0x55000000; cMenuBg = 0xFFF1F1F5.toInt(); cMenuSel = 0xFFD6D8DE.toInt(); cCell = 0xFFE4E5EA.toInt()
+            cTabSel = 0xFFC3C6CE.toInt(); cPill = 0xFFC4C7CF.toInt()
+        }
+        pStroke.color = cFg; pFill.color = cFg; pTxt.color = cFg
+    }
+
+    fun bgColor(): Int = cBg
+    fun isLight(): Boolean = light
+
+    fun loadPrefs() {
+        val t = prefs.getInt("theme", 0)
+        val sysDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        applyTheme(t == 1 || (t == 2 && !sysDark))
+        searchEnabled = prefs.getBoolean("emoji_search", true)
+        searchScale = prefs.getInt("search_h", 100) / 100f
+        val nhf = prefs.getInt("kb_h", 100) / 100f
+        val ndy = prefs.getInt("icon_y", 0).toFloat()
+        val nsz = prefs.getInt("icon_sz", 100) / 100f
+        oneHand = prefs.getInt("onehand", 0)
+        if (nhf != hf || ndy != iconDy || nsz != iconSz) {
+            hf = nhf; iconDy = ndy; iconSz = nsz
+            for (i in keysCache.indices) keysCache[i] = null
+            requestLayout()
+        }
+        invalidate()
     }
 
     // ---------- tata letak ----------
-    private fun ky(y: Float) = y * HF
-    private fun kh() = 120f * HF
+    private fun ky(y: Float) = y * hf
+    private fun kh() = 120f * hf
+    private fun iconCy() = ky(838f) + iconDy
 
     private fun row(chars: List<String>, x0: Float, pitch: Float, w: Float, y: Float): List<Key> =
         chars.mapIndexed { i, c -> Key(c, c[0].code, x0 + i * pitch, ky(y), w, kh(), K_LETTER) }
 
+    private fun iconKeys(): List<Key> {
+        val s = 90f * iconSz
+        return listOf(
+            Key("globe", GLOBE, 135f - s / 2, iconCy() - s / 2, s, s, K_ICON),
+            Key("mic", MIC, 945f - s / 2, iconCy() - s / 2, s, s, K_ICON)
+        )
+    }
+
     private fun bottomRow(first: Key, second: Key): List<Key> = listOf(
         first, second,
         Key(" ", SPACE, 298f, ky(628f), 492f, kh(), K_FUNC),
-        Key("\n", RET, 808f, ky(628f), 252f, kh(), K_FUNC),
-        Key("globe", GLOBE, 90f, ky(838f) - 45f, 90f, 90f, K_ICON),
-        Key("mic", MIC, 900f, ky(838f) - 45f, 90f, 90f, K_ICON)
-    )
+        Key("\n", RET, 808f, ky(628f), 252f, kh(), K_FUNC)
+    ) + iconKeys()
 
     private fun build(p: Int): List<Key> {
         keysCache[p]?.let { return it }
@@ -165,18 +226,20 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
                 k += bottomRow(Key("ABC", ABC, 20f, ky(628f), 121f, kh(), K_FUNC), Key("emoji", EMOJI, 160f, ky(628f), 121f, kh(), K_FUNC))
             }
             else -> {
-                k += Key("ABC", ABC, 20f, ky(838f) - 45f, 150f, 90f, K_PLAIN)
-                k += Key("del", DEL, 937f, TAB_CY - 42f, 123f, 84f, K_PLAIN)
-                k += Key("mic", MIC, 900f, ky(838f) - 45f, 90f, 90f, K_ICON)
+                k += Key("ABC", ABC, 20f, iconCy() - 45f, 150f, 90f, K_PLAIN)
+                k += Key("del", DEL, 937f, tabCy() - 42f, 123f, 84f, K_PLAIN)
+                k += iconKeys().filter { it.code == MIC }
             }
         }
         keysCache[p] = k
         return k
     }
 
-    private val TAB_CY get() = ky(640f)
-    private val GRID_TOP get() = if (searchEnabled) ky(150f) else ky(40f)
-    private fun areaH() = TAB_CY - 48f - GRID_TOP
+    // geometri panel emoji (mengikuti proporsi emoji iPhone asli)
+    private fun tabCy() = ky(687f)
+    private fun gridTop() = if (searchEnabled) ky(144f) else ky(80f)
+    private fun rowH() = 126f * hf
+    private val GX0 = 8f
 
     private fun keys() = build(page)
 
@@ -195,8 +258,8 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         else -> repo.byCat[EmojiRepo.CATS[tab - 2]] ?: emptyList()
     }
     private fun gridRows() = if (isStickerTab()) 2 else 4
-    private fun cellH() = areaH() / gridRows()
-    private fun cellW() = if (isStickerTab()) cellH() else 127f
+    private fun cellH() = if (isStickerTab()) rowH() * 2 else rowH()
+    private fun cellW() = if (isStickerTab()) cellH() else 145f
     private fun itemCount(): Int = if (isStickerTab()) stickerFiles.size + 1 else gridItems().size
     private fun maxScroll(): Float {
         val cols = ceil(itemCount() / gridRows().toFloat())
@@ -227,7 +290,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     override fun onMeasure(wSpec: Int, hSpec: Int) {
         val w = MeasureSpec.getSize(wSpec)
         scale = w / DW
-        val h = (DH * HF * scale).toInt() + bottomInset
+        val h = (DH * hf * scale).toInt() + bottomInset
         setMeasuredDimension(w, h)
     }
 
@@ -242,33 +305,29 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
 
     // ---------- API untuk service ----------
     fun setSuggestions(a: String, b: String, c: String, boldMiddle: Boolean) {
-        val now = android.os.SystemClock.uptimeMillis()
         for (i in 0..2) fromSug[i] = curSug[i]
         sug[0] = a; sug[1] = b; sug[2] = c; sugBold = boldMiddle
         for (i in 0..2) curSug[i] = sug[i]
         fadeDur = (tapGap * 0.6f).toLong().coerceIn(70L, 220L)
-        fadeStart = now
+        fadeStart = SystemClock.uptimeMillis()
         invalidate(0, 0, width, (ky(165f) * scale).toInt())
-    }
-
-    fun loadPrefs() {
-        searchEnabled = prefs.getBoolean("emoji_search", true)
-        searchScale = prefs.getInt("search_h", 100) / 100f
-        invalidate()
     }
 
     private fun fadeT(now: Long): Float = ((now - fadeStart).toFloat() / fadeDur).coerceIn(0f, 1f)
 
-    fun resetPage() { page = 0; searchMode = false; query = ""; invalidate() }
-    fun setNumberPage() { page = 1; searchMode = false; invalidate() }
+    fun resetPage() { page = 0; searchMode = false; query = ""; menuOpen = false; invalidate() }
+    fun setNumberPage() { page = 1; searchMode = false; menuOpen = false; invalidate() }
 
     // ---------- gambar ----------
+    private fun oneOff(): Float = if (oneHand == 1) 0f else width * (1f - ONE_F)
+
     override fun onDraw(c: Canvas) {
         val s = scale
         pKey.color = cBg
         rf.set(0f, 0f, width.toFloat(), height.toFloat() + 80f)
         c.drawRoundRect(rf, 64f * s, 64f * s, pKey)
 
+        if (oneHand != 0) { c.save(); c.translate(oneOff(), 0f); c.scale(ONE_F, 1f) }
         c.save(); c.scale(s, s)
         if (page == 3) {
             drawEmojiTop(c)
@@ -282,18 +341,32 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             val k = down.valueAt(i)
             if (k.kind == K_LETTER && page != 3) drawPopup(c, k)
         }
+        if (menuOpen) drawMenu(c)
         c.restore()
+        if (oneHand != 0) { c.restore(); drawOneHandButton(c) }
+    }
+
+    private fun drawOneHandButton(c: Canvas) {
+        val stripW = width * (1f - ONE_F)
+        val cx = if (oneHand == 1) width - stripW / 2 else stripW / 2
+        val cy = height * 0.5f
+        pKey.color = cFunc; c.drawCircle(cx, cy, 34f * scale + 8f, pKey)
+        pStroke.strokeWidth = 5f * scale + 1f
+        val d = if (oneHand == 1) 1 else -1
+        c.drawLine(cx - 8f * d * scale, cy - 14f * scale, cx + 8f * d * scale, cy, pStroke)
+        c.drawLine(cx + 8f * d * scale, cy, cx - 8f * d * scale, cy + 14f * scale, pStroke)
+        pStroke.strokeWidth = 5.5f
     }
 
     private fun drawMagnifier(c: Canvas, cx: Float, cy: Float) {
         pStroke.color = cHint; pStroke.strokeWidth = 5f
         c.drawCircle(cx - 4f, cy - 4f, 14f, pStroke)
         c.drawLine(cx + 6f, cy + 6f, cx + 17f, cy + 17f, pStroke)
-        pStroke.color = Color.WHITE; pStroke.strokeWidth = 5.5f
+        pStroke.color = cFg; pStroke.strokeWidth = 5.5f
     }
 
     private fun drawPill(c: Canvas, top: Float, bottom: Float) {
-        pKey.color = cKey
+        pKey.color = cPill
         rf.set(20f, top, 1060f, bottom)
         c.drawRoundRect(rf, (bottom - top) / 2, (bottom - top) / 2, pKey)
         val cy = (top + bottom) / 2
@@ -301,24 +374,23 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = 44f
         if (query.isEmpty()) { pTxt.color = cHint; c.drawText("Cari Emoji", 104f, cy + 15f, pTxt) }
         else {
-            pTxt.color = Color.WHITE
+            pTxt.color = cFg
             var t = query; while (pTxt.measureText(t) > 760f && t.length > 1) t = t.drop(1)
             c.drawText(t, 104f, cy + 15f, pTxt)
             if (searchMode) { val x = 104f + pTxt.measureText(t) + 3f; pKey.color = cBlue; c.drawRect(x, cy - 24f, x + 3f, cy + 24f, pKey) }
-            // tombol hapus teks pencarian
             pKey.color = cHint; c.drawCircle(1015f, cy, 22f, pKey)
-            pStroke.color = cKey; pStroke.strokeWidth = 4f
+            pStroke.color = cPill; pStroke.strokeWidth = 4f
             c.drawLine(1007f, cy - 8f, 1023f, cy + 8f, pStroke); c.drawLine(1023f, cy - 8f, 1007f, cy + 8f, pStroke)
-            pStroke.color = Color.WHITE; pStroke.strokeWidth = 5.5f
+            pStroke.color = cFg; pStroke.strokeWidth = 5.5f
         }
-        pTxt.textAlign = Paint.Align.CENTER; pTxt.color = Color.WHITE
+        pTxt.textAlign = Paint.Align.CENTER; pTxt.color = cFg
     }
 
     private fun drawEmojiTop(c: Canvas) {
         if (!searchEnabled) return
-        val h = 97f * searchScale
-        val top = 18f + (116f - h) / 2
-        drawPill(c, top, top + h)
+        val h = 97f * searchScale * hf
+        val mid = ky(68.5f)
+        drawPill(c, mid - h / 2, mid + h / 2)
     }
 
     private fun drawSearchTop(c: Canvas) {
@@ -331,51 +403,51 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     }
 
     private fun drawGrid(c: Canvas, s: Float) {
-        val rows = gridRows(); val cw = cellW(); val ch = cellH(); val top = GRID_TOP
+        val rows = gridRows(); val cw = cellW(); val ch = cellH(); val top = gridTop()
         c.save(); c.clipRect(0f, top, DW, top + rows * ch)
         val off = scrollPx / s
-        val first = max(0, (off / cw).toInt())
+        val first = max(0, ((off - GX0) / cw).toInt())
         val last = ((off + DW) / cw).toInt() + 1
         if (isStickerTab()) {
             for (col in first..last) for (r in 0 until rows) {
                 val idx = col * rows + r
                 if (idx > stickerFiles.size) continue
-                val x = 20f + col * cw - off; val y = top + r * ch
+                val x = GX0 + col * cw - off; val y = top + r * ch
                 if (idx == 0) {
-                    pKey.color = cKey; rf.set(x + 8f, y + 8f, x + cw - 8f, y + ch - 8f); c.drawRoundRect(rf, 28f, 28f, pKey)
+                    pKey.color = cFunc; rf.set(x + 8f, y + 8f, x + cw - 8f, y + ch - 8f); c.drawRoundRect(rf, 28f, 28f, pKey)
                     pStroke.strokeWidth = 8f
                     c.drawLine(x + cw / 2 - 28f, y + ch / 2, x + cw / 2 + 28f, y + ch / 2, pStroke)
                     c.drawLine(x + cw / 2, y + ch / 2 - 28f, x + cw / 2, y + ch / 2 + 28f, pStroke)
                     pStroke.strokeWidth = 5.5f
                 } else {
-                    pKey.color = 0xFF262626.toInt(); rf.set(x + 8f, y + 8f, x + cw - 8f, y + ch - 8f); c.drawRoundRect(rf, 28f, 28f, pKey)
+                    pKey.color = cCell; rf.set(x + 8f, y + 8f, x + cw - 8f, y + ch - 8f); c.drawRoundRect(rf, 28f, 28f, pKey)
                     val b = thumb(stickerFiles[idx - 1])
                     if (b != null) { rf.set(x + 18f, y + 18f, x + cw - 18f, y + ch - 18f); c.drawBitmap(b, null, rf, pBmp) }
                 }
             }
         } else {
             val items = gridItems()
-            pEmoji.textSize = 70f
+            pEmoji.textSize = 93f
             for (col in first..last) for (r in 0 until rows) {
                 val idx = col * rows + r
                 if (idx >= items.size) continue
-                c.drawText(items[idx], 20f + col * cw - off + cw / 2, top + r * ch + ch / 2 + 25f, pEmoji)
+                c.drawText(items[idx], GX0 + col * cw - off + cw / 2, top + r * ch + ch / 2 + 33f, pEmoji)
             }
             if (items.isEmpty()) {
                 pTxt.color = cHint; pTxt.textSize = 40f
                 c.drawText(if (query.isNotEmpty()) "Tidak ada hasil" else if (tab == 1) "Belum ada emoji terbaru" else "Memuat emoji…", 540f, top + 200f, pTxt)
-                pTxt.color = Color.WHITE
+                pTxt.color = cFg
             }
         }
         c.restore()
     }
 
     private fun drawTabs(c: Canvas) {
-        val cy = TAB_CY
+        val cy = tabCy()
         for (i in TAB_ICONS.indices) {
-            val cx = 65f + i * 92f
+            val cx = 69f + i * 82.5f
             val sel = query.isEmpty() && i == tab
-            if (sel) { pKey.color = 0xFF4A4A4A.toInt(); c.drawCircle(cx, cy, 40f, pKey) }
+            if (sel) { pKey.color = cTabSel; c.drawCircle(cx, cy, 38f, pKey) }
             pTab.alpha = if (sel) 255 else 150; pTab.textSize = 46f
             c.drawText(TAB_ICONS[i], cx, cy + 16f, pTab)
         }
@@ -383,13 +455,13 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
 
     private fun drawSuggestions(c: Canvas) {
         val cy = ky(110f)
-        pTxt.textSize = 48f
         pStroke.color = cDiv; pStroke.strokeWidth = 2f
         c.drawLine(363f, cy - 35f, 363f, cy + 35f, pStroke)
         c.drawLine(716f, cy - 35f, 716f, cy + 35f, pStroke)
-        pStroke.color = Color.WHITE; pStroke.strokeWidth = 5.5f
+        pStroke.color = cFg; pStroke.strokeWidth = 5.5f
+        pTxt.textSize = 48f
         val xs = floatArrayOf(188f, 540f, 892f)
-        val t = fadeT(android.os.SystemClock.uptimeMillis())
+        val t = fadeT(SystemClock.uptimeMillis())
         for (i in 0..2) {
             if (fromSug[i] == curSug[i] || t >= 1f) drawSugText(c, curSug[i], xs[i], cy, i, 255)
             else {
@@ -399,12 +471,12 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         }
         if (t < 1f) postInvalidateOnAnimation(0, 0, width, (ky(165f) * scale).toInt())
         pTxt.isFakeBoldText = false
-        pTxt.color = Color.WHITE; pTxt.alpha = 255
+        pTxt.color = cFg; pTxt.alpha = 255
     }
 
     private fun drawSugText(c: Canvas, t: String, x: Float, cy: Float, i: Int, a: Int) {
         if (t.isEmpty() || a <= 0) return
-        pTxt.color = if (i == 1 && sugBold) Color.WHITE else cSug
+        pTxt.color = if (i == 1 && sugBold) cFg else cSug
         pTxt.alpha = a.coerceIn(0, 255)
         pTxt.isFakeBoldText = (i == 1 && sugBold)
         var txt = t
@@ -416,22 +488,27 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         if (k.kind == K_ICON) { drawIcon(c, k); return }
         val cx = k.x + k.w / 2; val cy = k.y + k.h / 2
         if (k.kind == K_PLAIN) {
-            pTxt.color = if (pressed) cHint else Color.WHITE
+            pTxt.color = if (pressed) cHint else cFg
             if (k.code == DEL) { pStroke.alpha = if (pressed) 120 else 255; drawDelete(c, cx, cy); pStroke.alpha = 255 }
             else { pTxt.textSize = 46f; c.drawText(k.label, cx, cy + 16f, pTxt) }
-            pTxt.color = Color.WHITE
+            pTxt.color = cFg
             return
         }
         val isRet = k.code == RET
-        pKey.color = when {
+        val letterLook = k.kind == K_LETTER || k.code == SPACE
+        val base = when {
             isRet && showReturnArrow -> if (pressed) cBlueDown else cBlue
-            pressed && k.kind == K_LETTER -> cKey
-            pressed -> cKeyDown
-            else -> cKey
+            letterLook -> if (pressed && k.code == SPACE) cFunc else cKey
+            else -> if (pressed) cFuncDown else cFunc
         }
+        if (cShadow != 0) {
+            pKey.color = cShadow
+            rf.set(k.x, k.y + 2.5f, k.x + k.w, k.y + k.h + 2.5f); c.drawRoundRect(rf, 21f, 21f, pKey)
+        }
+        pKey.color = base
         rf.set(k.x, k.y, k.x + k.w, k.y + k.h)
         c.drawRoundRect(rf, 21f, 21f, pKey)
-        pTxt.color = Color.WHITE
+        pTxt.color = cFg
         when (k.code) {
             SHIFT -> drawShift(c, cx, cy)
             DEL -> drawDelete(c, cx, cy)
@@ -450,13 +527,19 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     private fun drawIcon(c: Canvas, k: Key) {
         val cx = k.x + k.w / 2; val cy = k.y + k.h / 2
         pBmp.alpha = if (down.indexOfValue(k) >= 0) 140 else 255
-        if (k.code == GLOBE) {
-            rf.set(cx - 37f, cy - 37f, cx + 37f, cy + 37f); c.drawBitmap(globe, null, rf, pBmp)
-        } else {
-            if (micActive) pBmp.colorFilter = PorterDuffColorFilter(0xFF3A86E8.toInt(), PorterDuff.Mode.SRC_IN)
-            rf.set(cx - 24f, cy - 40f, cx + 24f, cy + 40f); c.drawBitmap(mic, null, rf, pBmp)
-            pBmp.colorFilter = null
+        pBmp.colorFilter = when {
+            k.code == MIC && micActive -> PorterDuffColorFilter(cBlueDown, PorterDuff.Mode.SRC_IN)
+            light -> PorterDuffColorFilter(cFg, PorterDuff.Mode.SRC_IN)
+            else -> null
         }
+        if (k.code == GLOBE) {
+            val h = 37f * iconSz
+            rf.set(cx - h, cy - h, cx + h, cy + h); c.drawBitmap(globe, null, rf, pBmp)
+        } else {
+            val hw = 24f * iconSz; val hh = 40f * iconSz
+            rf.set(cx - hw, cy - hh, cx + hw, cy + hh); c.drawBitmap(mic, null, rf, pBmp)
+        }
+        pBmp.colorFilter = null
     }
 
     private fun drawShift(c: Canvas, cx: Float, cy: Float) {
@@ -479,14 +562,16 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     }
 
     private fun drawArrow(c: Canvas, cx: Float, cy: Float) {
+        pStroke.color = Color.WHITE
         c.drawLine(cx - 30f, cy, cx + 30f, cy, pStroke)
         c.drawLine(cx + 30f, cy, cx + 10f, cy - 20f, pStroke)
         c.drawLine(cx + 30f, cy, cx + 10f, cy + 20f, pStroke)
+        pStroke.color = cFg
     }
 
     private fun drawSmiley(c: Canvas, cx: Float, cy: Float) {
         c.drawCircle(cx, cy, 34f, pFill)
-        pKey.color = cKey
+        pKey.color = cFunc
         rf.set(cx - 15f, cy - 17f, cx - 5f, cy - 1f); c.drawOval(rf, pKey)
         rf.set(cx + 5f, cy - 17f, cx + 15f, cy - 1f); c.drawOval(rf, pKey)
         rf.set(cx - 21f, cy - 5f, cx + 21f, cy + 23f); c.drawArc(rf, 0f, 180f, true, pKey)
@@ -497,14 +582,113 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         var left = k.x + k.w / 2 - bw / 2
         left = left.coerceIn(6f, DW - bw - 6f)
         val top = k.y - bh + k.h * 0.25f
+        if (cShadow != 0) { pKey.color = cShadow; rf.set(left, top + 3f, left + bw, top + bh + 3f); c.drawRoundRect(rf, 30f, 30f, pKey) }
         pKey.color = cPopup
         rf.set(left, top, left + bw, top + bh)
         c.drawRoundRect(rf, 30f, 30f, pKey)
         rf.set(k.x, top + bh - 40f, k.x + k.w, k.y + k.h)
         c.drawRoundRect(rf, 21f, 21f, pKey)
-        pTxt.color = Color.WHITE; pTxt.textSize = 86f
+        pTxt.color = cFg; pTxt.textSize = 86f
         val t = if (page == 0 && shift == 0) k.label.lowercase() else k.label
         c.drawText(t, left + bw / 2, top + bh * 0.55f + 28f, pTxt)
+    }
+
+    // ---------- menu tekan-tahan globe (seperti iOS) ----------
+    private val MENU_ROW = 116f
+    private val MENU_L = 16f
+    private val MENU_W = 600f
+    private fun menuBottom() = iconCy() - 55f * iconSz
+    private fun menuTop() = menuBottom() - (5 * MENU_ROW + 28f)
+    private fun menuLangIdx() = prefs.getInt("lang", 0)
+
+    private fun drawMenu(c: Canvas) {
+        val top = menuTop()
+        if (cShadow != 0) { pKey.color = cShadow; rf.set(MENU_L, top + 4f, MENU_L + MENU_W, menuBottom() + 4f); c.drawRoundRect(rf, 56f, 56f, pKey) }
+        pKey.color = cMenuBg
+        rf.set(MENU_L, top, MENU_L + MENU_W, menuBottom()); c.drawRoundRect(rf, 56f, 56f, pKey)
+        val labels = arrayOf("Pengaturan Keyboard...", "Indonesia", "English (US)", "Emoji")
+        pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = 44f
+        for (i in 0..3) {
+            val y0 = top + 14f + i * MENU_ROW
+            val sel = (i == 1 && menuLangIdx() == 0) || (i == 2 && menuLangIdx() == 1)
+            if (sel || menuHover == i) {
+                pKey.color = cMenuSel; rf.set(MENU_L + 12f, y0 + 6f, MENU_L + MENU_W - 12f, y0 + MENU_ROW - 6f)
+                c.drawRoundRect(rf, (MENU_ROW - 12f) / 2, (MENU_ROW - 12f) / 2, pKey)
+            }
+            pTxt.color = cFg
+            c.drawText(labels[i], MENU_L + 46f, y0 + MENU_ROW / 2 + 15f, pTxt)
+        }
+        pTxt.textAlign = Paint.Align.CENTER
+        // baris ikon mode satu tangan: kiri, normal, kanan
+        val y0 = top + 14f + 4 * MENU_ROW
+        val cw = MENU_W / 3
+        for (i in 0..2) {
+            val mode = when (i) { 0 -> 1; 1 -> 0; else -> 2 }
+            val sel = oneHand == mode
+            val cx = MENU_L + cw * i + cw / 2; val cy = y0 + MENU_ROW / 2
+            if (sel || (menuHover == 4 && menuHoverCell == i)) {
+                pKey.color = cMenuSel; rf.set(cx - 62f, cy - 46f, cx + 62f, cy + 46f); c.drawRoundRect(rf, 46f, 46f, pKey)
+            }
+            drawKbIcon(c, cx, cy, i)
+        }
+    }
+
+    private fun drawKbIcon(c: Canvas, cx: Float, cy: Float, i: Int) {
+        pStroke.strokeWidth = 4.5f
+        rf.set(cx - 36f, cy - 22f, cx + 36f, cy + 22f); c.drawRoundRect(rf, 8f, 8f, pStroke)
+        for (r in 0..1) for (q in 0..4) c.drawPoint(cx - 24f + q * 12f, cy - 9f + r * 11f, pStroke)
+        c.drawLine(cx - 18f, cy + 12f, cx + 18f, cy + 12f, pStroke)
+        if (i != 1) {
+            // segitiga kecil menunjukkan arah keyboard bergeser
+            val d = if (i == 0) -1f else 1f
+            val ax = cx + d * 50f
+            path.reset(); path.moveTo(ax + d * 12f, cy); path.lineTo(ax - d * 6f, cy - 11f); path.lineTo(ax - d * 6f, cy + 11f); path.close()
+            c.drawPath(path, pFill)
+        }
+        pStroke.strokeWidth = 5.5f
+    }
+
+    private fun menuHit(x: Float, y: Float): Int {
+        if (x < MENU_L || x > MENU_L + MENU_W) return -1
+        val r = ((y - menuTop() - 14f) / MENU_ROW).toInt()
+        return if (y >= menuTop() + 14f && r in 0..4) r else -1
+    }
+
+    private fun menuAct(row: Int, x: Float) {
+        when (row) {
+            0 -> l.onOpenSettings()
+            1 -> { prefs.edit().putInt("lang", 0).apply(); l.onLanguage(0) }
+            2 -> { prefs.edit().putInt("lang", 1).apply(); l.onLanguage(1) }
+            3 -> { page = 3; searchMode = false; scrollPx = 0f; if (query.isEmpty() && tab == 0) reloadStickers() }
+            4 -> {
+                val i = ((x - MENU_L) / (MENU_W / 3)).toInt().coerceIn(0, 2)
+                oneHand = when (i) { 0 -> 1; 1 -> 0; else -> 2 }
+                prefs.edit().putInt("onehand", oneHand).apply()
+            }
+        }
+        invalidate()
+    }
+
+    private fun closeMenu() { menuOpen = false; menuHover = -1; menuHoverCell = -1; invalidate() }
+
+    private fun handleMenuTouch(e: MotionEvent): Boolean {
+        val idx = e.actionIndex
+        val x = e.getX(idx) / scale; val y = e.getY(idx) / scale
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_MOVE -> {
+                menuHover = menuHit(x, y)
+                menuHoverCell = if (menuHover == 4) ((x - MENU_L) / (MENU_W / 3)).toInt().coerceIn(0, 2) else -1
+                invalidate()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                val h = menuHover
+                if (h >= 0) { menuAct(h, x); closeMenu() }
+                else if (menuFresh) { menuFresh = false; menuHover = -1; invalidate() }
+                else closeMenu()
+            }
+            MotionEvent.ACTION_CANCEL -> closeMenu()
+        }
+        return true
     }
 
     // ---------- sentuhan ----------
@@ -526,7 +710,12 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         cursorMode = true
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
     }
-    private val globeLong = Runnable { l.onGlobe(true); down.clear(); invalidate() }
+    private val globeLong = Runnable {
+        down.clear()
+        menuOpen = true; menuFresh = true; menuHover = -1; menuHoverCell = -1
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        invalidate()
+    }
 
     // grid
     private var gridId = -1
@@ -549,9 +738,9 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
 
     private fun cellAt(px: Float, py: Float): Int {
         val s = scale; val x = px / s; val y = py / s
-        val col = ((x - 20f + scrollPx / s) / cellW()).toInt()
-        val r = ((y - GRID_TOP) / cellH()).toInt()
-        if (x < 20f || r !in 0 until gridRows() || col < 0) return -1
+        val col = ((x - GX0 + scrollPx / s) / cellW()).toInt()
+        val r = ((y - gridTop()) / cellH()).toInt()
+        if (x < GX0 || y < gridTop() || r !in 0 until gridRows() || col < 0) return -1
         return col * gridRows() + r
     }
 
@@ -583,7 +772,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     }
 
     private fun tap(k: Int = KeySounds.STD) {
-        val now = android.os.SystemClock.uptimeMillis()
+        val now = SystemClock.uptimeMillis()
         if (lastTapAt != 0L) { val g = (now - lastTapAt).coerceAtMost(600L).toFloat(); tapGap = tapGap * 0.7f + g * 0.3f }
         lastTapAt = now
         if (prefs.getBoolean("haptic", true)) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -610,19 +799,40 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (oneHand == 0) return touch(e)
+        val off = oneOff(); val w = width * ONE_F
+        val a = e.actionMasked
+        if (a == MotionEvent.ACTION_DOWN || a == MotionEvent.ACTION_POINTER_DOWN) {
+            val x = e.getX(e.actionIndex)
+            if (x < off || x > off + w) {
+                oneHand = 0; prefs.edit().putInt("onehand", 0).apply(); invalidate(); return true
+            }
+        }
+        val ev = MotionEvent.obtain(e)
+        ev.offsetLocation(-off, 0f)
+        val m = Matrix(); m.setScale(1f / ONE_F, 1f)
+        ev.transform(m)
+        val r = touch(ev)
+        ev.recycle()
+        return r
+    }
+
+    private fun touch(e: MotionEvent): Boolean {
         val idx = e.actionIndex
         val id = e.getPointerId(idx)
         val s = scale
+
+        if (menuOpen) return handleMenuTouch(e)
 
         // ---- grid emoji/stiker (satu jari) ----
         if (page == 3) {
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                     val x = e.getX(idx); val y = e.getY(idx)
-                    val gTop = GRID_TOP * s; val gBot = (GRID_TOP + gridRows() * cellH()) * s
-                    if (y < ky(165f) * s && searchEnabled) {
-                        tap(); // buka kolom pencarian emoji
-                        enterSearch(); return true
+                    val gTop = gridTop() * s; val gBot = (gridTop() + gridRows() * cellH()) * s
+                    if (y < gTop && y < ky(165f) * s) {
+                        if (searchEnabled) { tap(); enterSearch() }
+                        return true
                     }
                     if (y >= gTop && y < gBot && gridId < 0) {
                         gridId = id; gridX0 = x; gridY0 = y; gridScroll0 = scrollPx; gridMoved = false
@@ -631,9 +841,9 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
                         handler.postDelayed(gridLong, 650)
                         return true
                     }
-                    if (abs(y - TAB_CY * s) < 46f * s && x < 935f * s) {
-                        val i = ((x / s - 20f) / 92f).toInt()
-                        if (i in TAB_ICONS.indices) { tap(); selectTab(i) }
+                    if (abs(y - tabCy() * s) < 46f * s && x < 935f * s) {
+                        val i = ((x / s - 28f) / 82.5f).toInt()
+                        if (i in TAB_ICONS.indices && x / s >= 28f) { tap(); selectTab(i) }
                         return true
                     }
                 }
@@ -763,7 +973,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             EMOJI -> {
                 if (page == 3) { page = 0 } else {
                     page = 3; searchMode = false; scrollPx = 0f
-                    if (query.isEmpty()) { if (tab == 0) reloadStickers() }
+                    if (query.isEmpty() && tab == 0) reloadStickers()
                 }
                 invalidate()
             }
