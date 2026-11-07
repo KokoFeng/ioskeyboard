@@ -48,6 +48,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         fun onLanguage(i: Int)
         fun onClipText(s: String)
         fun onClipImage(f: File)
+        fun onCombine(a: String, b: String)
     }
 
     // ---------- warna (tema) ----------
@@ -158,6 +159,19 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     private var capturing = false
     private val pvCard = RectF(); private val pvPin = RectF(); private val pvDel = RectF()
     private val tp = TextPaint(Paint.ANTI_ALIAS_FLAG)
+    // emoji gabungan, zoom, nama
+    private val zoomer = EmojiZoom(ctx)
+    private var zoomActive = false
+    private var zoomPid = -1
+    private var zoomItem: String? = null
+    private var zoomD0 = 0f
+    private var zoomZ0 = 1f
+    private var combineBtn: Pair<String, String>? = null
+    private var combineMode = false
+    private val combineSel = ArrayList<String>()
+    private var genFiles: List<File> = emptyList()
+    private var userName = ""
+    private var nameShow = 0
     private val layouts = HashMap<Long, StaticLayout>()
 
     init {
@@ -199,6 +213,8 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         applyTheme(t == 1 || (t == 2 && !sysDark))
         layouts.clear()
         searchEnabled = prefs.getBoolean("emoji_search", true)
+        userName = prefs.getString("user_name", "") ?: ""
+        nameShow = prefs.getInt("name_show", 0)
         searchScale = prefs.getInt("search_h", 100) / 100f
         val nhf = prefs.getInt("kb_h", 100) / 100f
         val ndy = prefs.getInt("icon_y", 0).toFloat()
@@ -268,7 +284,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
 
     // geometri panel emoji (mengikuti proporsi emoji iPhone asli)
     private fun tabCy() = ky(687f)
-    private fun gridTop() = if (searchEnabled) ky(144f) else ky(80f)
+    private fun gridTop() = ky(144f)
     private fun rowH() = 126f * hf
     private val GX0 = 8f
 
@@ -285,7 +301,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     private fun gridItems(): List<String> = when {
         query.isNotEmpty() -> searchRes()
         tab == 0 -> emptyList()
-        tab == 1 -> repo.recents()
+        tab == 1 -> genFiles.map { "@" + it.name } + repo.recents()
         else -> repo.byCat[EmojiRepo.CATS[tab - 2]] ?: emptyList()
     }
     private fun gridRows() = if (isStickerTab()) 2 else 4
@@ -303,6 +319,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
 
     fun reloadStickers() {
         stickerFiles = StickerStore.list(context)
+        genFiles = GenStore.list(context)
         invalidate()
     }
 
@@ -336,7 +353,9 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         return i
     }
 
-    fun release() { sounds.release(); exec.shutdown() }
+    fun release() { zoomer.hideNow(); sounds.release(); exec.shutdown() }
+
+    fun setCombine(p: Pair<String, String>?) { combineBtn = p; invalidate(0, 0, width, (ky(165f) * scale).toInt()) }
 
     // ---------- API untuk service ----------
     fun setSuggestions(a: String, b: String, c: String, boldMiddle: Boolean) {
@@ -405,32 +424,70 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         pStroke.color = cFg; pStroke.strokeWidth = 5.5f
     }
 
-    private fun drawPill(c: Canvas, top: Float, bottom: Float) {
+    private fun drawPill(c: Canvas, top: Float, bottom: Float, left: Float = 20f, right: Float = 1060f) {
         pKey.color = cPill
-        rf.set(20f, top, 1060f, bottom)
+        rf.set(left, top, right, bottom)
         c.drawRoundRect(rf, (bottom - top) / 2, (bottom - top) / 2, pKey)
         val cy = (top + bottom) / 2
-        drawMagnifier(c, 64f, cy)
+        drawMagnifier(c, left + 44f, cy)
         pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = 44f
-        if (query.isEmpty()) { pTxt.color = cHint; c.drawText("Cari Emoji", 104f, cy + 15f, pTxt) }
+        if (query.isEmpty()) { pTxt.color = cHint; c.drawText("Cari Emoji", left + 84f, cy + 15f, pTxt) }
         else {
             pTxt.color = cFg
-            var t = query; while (pTxt.measureText(t) > 760f && t.length > 1) t = t.drop(1)
-            c.drawText(t, 104f, cy + 15f, pTxt)
-            if (searchMode) { val x = 104f + pTxt.measureText(t) + 3f; pKey.color = cBlue; c.drawRect(x, cy - 24f, x + 3f, cy + 24f, pKey) }
-            pKey.color = cHint; c.drawCircle(1015f, cy, 22f, pKey)
+            var t = query; while (pTxt.measureText(t) > (right - left) - 280f && t.length > 1) t = t.drop(1)
+            c.drawText(t, left + 84f, cy + 15f, pTxt)
+            if (searchMode) { val x = left + 84f + pTxt.measureText(t) + 3f; pKey.color = cBlue; c.drawRect(x, cy - 24f, x + 3f, cy + 24f, pKey) }
+            pKey.color = cHint; c.drawCircle(right - 45f, cy, 22f, pKey)
             pStroke.color = cPill; pStroke.strokeWidth = 4f
-            c.drawLine(1007f, cy - 8f, 1023f, cy + 8f, pStroke); c.drawLine(1023f, cy - 8f, 1007f, cy + 8f, pStroke)
+            c.drawLine(right - 53f, cy - 8f, right - 37f, cy + 8f, pStroke); c.drawLine(right - 37f, cy - 8f, right - 53f, cy + 8f, pStroke)
             pStroke.color = cFg; pStroke.strokeWidth = 5.5f
         }
         pTxt.textAlign = Paint.Align.CENTER; pTxt.color = cFg
     }
 
+    /** Ikon "Genmoji": wajah dengan percikan plus. */
+    private fun drawGenIcon(c: Canvas, cx: Float, cy: Float, color: Int) {
+        pStroke.color = color; pFill.color = color; pStroke.strokeWidth = 3.4f
+        rf.set(cx - 17f, cy - 15f, cx + 17f, cy + 19f); c.drawArc(rf, 55f, 280f, false, pStroke)
+        c.drawCircle(cx - 6f, cy - 2f, 2.3f, pFill); c.drawCircle(cx + 6f, cy - 2f, 2.3f, pFill)
+        rf.set(cx - 9f, cy + 1f, cx + 9f, cy + 13f); c.drawArc(rf, 20f, 140f, false, pStroke)
+        c.drawLine(cx + 14f, cy - 24f, cx + 14f, cy - 12f, pStroke); c.drawLine(cx + 8f, cy - 18f, cx + 20f, cy - 18f, pStroke)
+        pStroke.color = cFg; pFill.color = cFg; pStroke.strokeWidth = 5.5f
+    }
+
+    private fun drawGenButton(c: Canvas, top: Float, bottom: Float, left: Float, right: Float, label: String) {
+        pKey.color = cPill
+        rf.set(left, top, right, bottom); c.drawRoundRect(rf, (bottom - top) / 2, (bottom - top) / 2, pKey)
+        val cy = (top + bottom) / 2
+        val iconW = 46f
+        pTxt.textSize = 38f; pTxt.color = cFg
+        val tw = pTxt.measureText(label)
+        val total = iconW + 12f + tw
+        val x0 = (left + right) / 2 - total / 2
+        if (label != "Batal") drawGenIcon(c, x0 + 22f, cy + 2f, cFg)
+        pTxt.textAlign = Paint.Align.LEFT
+        c.drawText(label, if (label == "Batal") (left + right) / 2 - tw / 2 else x0 + iconW + 12f, cy + 13f, pTxt)
+        pTxt.textAlign = Paint.Align.CENTER
+    }
+
     private fun drawEmojiTop(c: Canvas) {
-        if (!searchEnabled) return
         val h = 97f * searchScale * hf
         val mid = ky(68.5f)
-        drawPill(c, mid - h / 2, mid + h / 2)
+        val top = mid - h / 2; val bot = mid + h / 2
+        if (combineMode) {
+            // pill pilihan: menampilkan dua emoji yang sudah dipilih
+            pKey.color = cPill; rf.set(20f, top, 790f, bot); c.drawRoundRect(rf, (bot - top) / 2, (bot - top) / 2, pKey)
+            val cy = (top + bot) / 2
+            pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = 38f; pTxt.color = cHint
+            c.drawText(if (combineSel.isEmpty()) "Pilih dua emoji…" else "Pilih satu lagi…", 54f, cy + 13f, pTxt)
+            pEmoji.textSize = 56f
+            for (i in combineSel.indices) c.drawText(combineSel[i], 640f + i * 76f, cy + 21f, pEmoji)
+            pTxt.textAlign = Paint.Align.CENTER; pTxt.color = cFg
+            drawGenButton(c, top, bot, 810f, 1060f, "Batal")
+        } else if (searchEnabled) {
+            drawPill(c, top, bot, 20f, 790f)
+            drawGenButton(c, top, bot, 810f, 1060f, "Gabung")
+        } else drawGenButton(c, top, bot, 20f, 1060f, "Gabung emoji")
     }
 
     private fun drawSearchTop(c: Canvas) {
@@ -471,7 +528,12 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             for (col in first..last) for (r in 0 until rows) {
                 val idx = col * rows + r
                 if (idx >= items.size) continue
-                c.drawText(items[idx], GX0 + col * cw - off + cw / 2, top + r * ch + ch / 2 + 33f, pEmoji)
+                val it0 = items[idx]
+                val ccx = GX0 + col * cw - off + cw / 2; val ccy = top + r * ch + ch / 2
+                if (it0.startsWith("@")) {
+                    val gb = thumb(File(GenStore.dir(context), it0.substring(1)))
+                    if (gb != null) { rf.set(ccx - 50f, ccy - 50f, ccx + 50f, ccy + 50f); c.drawBitmap(gb, null, rf, pBmp) }
+                } else c.drawText(it0, ccx, ccy + 33f, pEmoji)
             }
             if (items.isEmpty()) {
                 pTxt.color = cHint; pTxt.textSize = 40f
@@ -499,6 +561,14 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
 
     private fun drawSuggestions(c: Canvas) {
         val cy = ky(110f)
+        if (combineBtn != null) {
+            pTxt.textSize = 44f; pTxt.color = cFg
+            drawGenIcon(c, 440f, cy, cFg)
+            pTxt.textAlign = Paint.Align.LEFT
+            c.drawText("Gabungkan", 486f, cy + 15f, pTxt)
+            pTxt.textAlign = Paint.Align.CENTER
+            return
+        }
         pStroke.color = cDiv; pStroke.strokeWidth = 2f
         c.drawLine(363f, cy - 35f, 363f, cy + 35f, pStroke)
         c.drawLine(716f, cy - 35f, 716f, cy + 35f, pStroke)
@@ -558,7 +628,14 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             DEL -> drawDelete(c, cx, cy)
             EMOJI -> drawSmiley(c, cx, cy)
             RET -> if (showReturnArrow) drawArrow(c, cx, cy) else { pTxt.textSize = 44f; c.drawText(returnLabel, cx, cy + 15f, pTxt) }
-            SPACE -> {}
+            SPACE -> {
+                val n = if ((nameShow == 1 || nameShow == 3) && userName.isNotBlank()) userName else ""
+                if (n.isNotEmpty()) {
+                    pTxt.textSize = 34f; pTxt.color = cHint
+                    var t = n; while (pTxt.measureText(t) > 440f && t.length > 3) t = t.dropLast(1)
+                    c.drawText(t, cx, cy + 12f, pTxt); pTxt.color = cFg
+                }
+            }
             NUM, ABC, SYM -> { pTxt.textSize = if (k.label.length > 2) 46f else 50f; c.drawText(k.label, cx, cy + 17f, pTxt) }
             else -> {
                 pTxt.textSize = 58f
@@ -767,16 +844,74 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     private var gridScroll0 = 0f
     private var gridMoved = false
     private val gridLong = Runnable {
-        if (gridId >= 0 && !gridMoved && isStickerTab()) {
+        if (gridId >= 0 && !gridMoved) {
             val idx = cellAt(gridX0, gridY0)
-            if (idx in 1..stickerFiles.size) {
-                val f = stickerFiles[idx - 1]
-                f.delete(); thumbs.remove(f.path); loading.remove(f.path)
-                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                Toast.makeText(context, "Stiker dihapus", Toast.LENGTH_SHORT).show()
-                gridId = -1; reloadStickers()
-            }
+            if (isStickerTab()) {
+                if (idx in 1..stickerFiles.size) {
+                    val f = stickerFiles[idx - 1]
+                    f.delete(); thumbs.remove(f.path); loading.remove(f.path)
+                    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    Toast.makeText(context, "Stiker dihapus", Toast.LENGTH_SHORT).show()
+                    gridId = -1; reloadStickers()
+                }
+            } else if (idx >= 0) startZoom(idx)
         }
+    }
+
+    // ---- emoji besar (tekan-tahan) ----
+    private fun toScreen(x: Float, y: Float): Pair<Int, Int> {
+        val loc = IntArray(2); getLocationOnScreen(loc)
+        val sx = if (oneHand != 0) loc[0] + oneOff() + x * ONE_F else loc[0] + x
+        return Pair(sx.toInt(), (loc[1] + y).toInt())
+    }
+
+    private fun zoomContent(item: String): Pair<String?, Bitmap?> =
+        if (item.startsWith("@")) Pair(null, try { BitmapFactory.decodeFile(File(GenStore.dir(context), item.substring(1)).path) } catch (_: Exception) { null })
+        else Pair(item, null)
+
+    private fun startZoom(idx: Int) {
+        val items = gridItems()
+        if (idx !in items.indices) return
+        val item = items[idx]
+        zoomItem = item; zoomActive = true; zoomPid = gridId; gridId = -1
+        vt?.recycle(); vt = null
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        val (sx, sy) = toScreen(gridX0, gridY0)
+        val (t, b) = zoomContent(item)
+        zoomer.show(this, t, b, repo.face, sx, sy)
+    }
+
+    private fun endZoom() {
+        zoomActive = false; zoomPid = -1; zoomItem = null; zoomD0 = 0f
+        zoomer.hide()
+    }
+
+    private fun pinchDist(e: MotionEvent): Float {
+        val dx = e.getX(0) - e.getX(1); val dy = e.getY(0) - e.getY(1)
+        return Math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+    }
+
+    private fun handleZoomTouch(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_POINTER_DOWN -> if (e.pointerCount >= 2) { zoomD0 = pinchDist(e); zoomZ0 = zoomer.zoom }
+            MotionEvent.ACTION_MOVE -> {
+                val pi = e.findPointerIndex(zoomPid)
+                if (pi < 0) return true
+                val (sx, sy) = toScreen(e.getX(pi), e.getY(pi))
+                if (e.pointerCount >= 2 && zoomD0 > 0f) {
+                    zoomer.setZoom(zoomZ0 * pinchDist(e) / zoomD0, this, sx, sy)
+                } else {
+                    val i = cellAt(e.getX(pi), e.getY(pi)); val items = gridItems()
+                    if (i in items.indices && items[i] != zoomItem) {
+                        zoomItem = items[i]
+                        val (t, b) = zoomContent(items[i]); zoomer.update(this, t, b, repo.face, sx, sy)
+                    } else zoomItem?.let { cur -> val (t, b) = zoomContent(cur); zoomer.update(this, t, b, repo.face, sx, sy) }
+                }
+            }
+            MotionEvent.ACTION_POINTER_UP -> { if (e.getPointerId(e.actionIndex) == zoomPid) endZoom() else zoomD0 = 0f }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> endZoom()
+        }
+        return true
     }
 
     private fun cellAt(px: Float, py: Float): Int {
@@ -865,6 +1000,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         val id = e.getPointerId(idx)
         val s = scale
 
+        if (zoomActive) return handleZoomTouch(e)
         if (menuOpen) return handleMenuTouch(e)
         if (prevItem != null) return handlePreviewTouch(e)
         if (page == 4 && touchClip(e)) return true
@@ -876,7 +1012,10 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
                     val x = e.getX(idx); val y = e.getY(idx)
                     val gTop = gridTop() * s; val gBot = (gridTop() + gridRows() * cellH()) * s
                     if (y < gTop && y < ky(165f) * s) {
-                        if (searchEnabled) { tap(); enterSearch() }
+                        val xd = x / s
+                        val btnL = if (searchEnabled || combineMode) 810f else 20f
+                        if (xd >= btnL) { tap(); combineMode = !combineMode; combineSel.clear(); invalidate() }
+                        else if (searchEnabled && !combineMode) { tap(); enterSearch() }
                         return true
                     }
                     if (y >= gTop && y < gBot && gridId < 0) {
@@ -931,6 +1070,8 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
                             val i = ((x / s - 20f) / 104f).toInt()
                             if (i in 0 until min(res.size, 10)) { tap(); insertEmoji(res[i]) }
                         }
+                    } else if (combineBtn != null) {
+                        tap(); combineBtn?.let { l.onCombine(it.first, it.second) }
                     } else {
                         val slot = (x / (width / 3f)).toInt().coerceIn(0, 2)
                         if (sug[slot].isNotEmpty()) { tap(); l.onSuggestion(slot) }
@@ -1278,10 +1419,21 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         if (isStickerTab()) {
             if (i == 0) l.onCreateSticker()
             else if (i - 1 < stickerFiles.size) { tap(); l.onSticker(stickerFiles[i - 1]) }
-        } else {
-            val items = gridItems()
-            if (i < items.size) { tap(); insertEmoji(items[i]) }
+            return
         }
+        val items = gridItems()
+        if (i >= items.size) return
+        val it0 = items[i]
+        if (combineMode) {
+            if (!it0.startsWith("@")) {
+                tap(); combineSel.add(it0)
+                if (combineSel.size >= 2) { val a = combineSel[0]; val b = combineSel[1]; combineMode = false; combineSel.clear(); l.onCombine(a, b) }
+                invalidate()
+            }
+            return
+        }
+        tap()
+        if (it0.startsWith("@")) l.onClipImage(File(GenStore.dir(context), it0.substring(1))) else insertEmoji(it0)
     }
 
     private fun insertEmoji(e: String) {

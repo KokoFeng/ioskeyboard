@@ -28,6 +28,8 @@
                 <data android:mimeType="image/*" />
             </intent-filter>
         </activity>
+        <activity android:name=".CombineActivity" android:exported="false" android:taskAffinity="" android:excludeFromRecents="true" android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".OnboardActivity" android:exported="false" />
         <provider android:name="androidx.core.content.FileProvider"
             android:authorities="com.feng.ioskeyboard.files"
             android:exported="false" android:grantUriPermissions="true">

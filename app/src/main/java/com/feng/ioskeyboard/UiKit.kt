@@ -262,11 +262,11 @@ class Screen(private val act: Activity, val pal: Palette) {
         return r
     }
 
-    fun inputRow(hint: String, onText: (String) -> Unit): View {
+    fun inputRow(hint: String, initial: String = "", onText: (String) -> Unit): View {
         val r = rowBase()
         val et = android.widget.EditText(ctx).apply {
             this.hint = hint; setHintTextColor(pal.sub); setTextColor(pal.text); textSize = 17f
-            background = null; setSingleLine(true); setPadding(0, 0, 0, 0)
+            background = null; setSingleLine(true); setPadding(0, 0, 0, 0); setText(initial)
             addTextChangedListener(object : android.text.TextWatcher {
                 override fun afterTextChanged(e: android.text.Editable?) { onText(e?.toString() ?: "") }
                 override fun beforeTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}

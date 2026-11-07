@@ -36,6 +36,7 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
     private var suggestOn = true
     private var lastSpaceAt = 0L
     private var pendingMic: String? = null
+    private var combinePair: Pair<String, String>? = null
     private var started = false          // saran kata baru muncul setelah pengguna mulai mengetik
     private var autoCorrect = true
     private var sr: SpeechRecognizer? = null
@@ -63,7 +64,39 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
         } catch (_: Exception) {}
     }
 
+    private fun isEmojiStr(s: String): Boolean {
+        if (s.isEmpty()) return false
+        val cp = s.codePointAt(0)
+        return cp >= 0x1F000 || cp in 0x2600..0x27BF || cp in 0x2B50..0x2B55 || cp in 0x231A..0x23FF ||
+            cp in 0x25AA..0x25FE || cp == 0x00A9 || cp == 0x00AE || cp == 0x203C || cp == 0x2049 || cp == 0x2122 ||
+            cp == 0x2139 || cp == 0x2934 || cp == 0x2935 || cp == 0x3030 || cp == 0x303D || cp == 0x3297 || cp == 0x3299
+    }
+
+    /** Dua emoji terakhir sebelum kursor (bila keduanya emoji). */
+    private fun detectCombine(): Pair<String, String>? {
+        val ic = currentInputConnection ?: return null
+        val t = ic.getTextBeforeCursor(24, 0)?.toString() ?: return null
+        if (t.isEmpty()) return null
+        return try {
+            val bi = android.icu.text.BreakIterator.getCharacterInstance()
+            bi.setText(t)
+            val parts = ArrayList<String>()
+            var e = t.length
+            repeat(2) {
+                val st = bi.preceding(e)
+                if (st == android.icu.text.BreakIterator.DONE) return null
+                parts.add(t.substring(st, e)); e = st
+            }
+            if (isEmojiStr(parts[0]) && isEmojiStr(parts[1])) Pair(parts[1], parts[0]) else null
+        } catch (_: Exception) { null }
+    }
+
+    override fun onCombine(a: String, b: String) {
+        startActivity(Intent(this, CombineActivity::class.java).putExtra("a", a).putExtra("b", b).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
     override fun onClipText(s: String) {
+        combinePair = null
         val ic = currentInputConnection ?: return
         lastOwnEdit = SystemClock.uptimeMillis()
         started = true
@@ -173,6 +206,7 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
         applyPrefs()
         captureClip()
         started = false
+        combinePair = null
         kv.reloadStickers()
         word.setLength(0); prevWord = null
         resync()
@@ -196,6 +230,7 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
         lastOwnEdit = SystemClock.uptimeMillis()
         started = true
         ic.commitText(s, 1)
+        combinePair = if (isEmojiStr(s)) detectCombine() else null
         val c = s[0]
         if (s.length == 1 && (c.isLetter() || (c == '\'' && word.isNotEmpty()))) word.append(c)
         else { finishWord(); if (s == "." || s == "!" || s == "?") updateShiftFromContext() }
@@ -204,6 +239,7 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onDelete() {
+        combinePair = null
         val ic = currentInputConnection ?: return
         lastOwnEdit = SystemClock.uptimeMillis()
         val sel = ic.getSelectedText(0)
@@ -216,6 +252,7 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onSpace() {
+        combinePair = null
         val ic = currentInputConnection ?: return
         lastOwnEdit = SystemClock.uptimeMillis()
         started = true
@@ -245,6 +282,7 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onReturn() {
+        combinePair = null
         val ic = currentInputConnection ?: return
         lastOwnEdit = SystemClock.uptimeMillis()
         finishWord()
@@ -335,6 +373,7 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
     private var sugList = arrayOf("", "", "")
 
     override fun onSuggestion(slot: Int) {
+        combinePair = null
         val ic = currentInputConnection ?: return
         val t = sugList[slot]
         if (t.isEmpty()) return
@@ -358,6 +397,10 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
 
     private fun refresh() {
         if (!::kv.isInitialized) return
+        if (combinePair != null) {
+            sugList = arrayOf("", "", ""); kv.probs = emptyMap(); kv.setSuggestions("", "", "", false); kv.setCombine(combinePair); return
+        }
+        kv.setCombine(null)
         if (!suggestOn) { kv.probs = emptyMap(); kv.setSuggestions("", "", "", false); sugList = arrayOf("", "", ""); return }
         val w = word.toString()
         if (w.isEmpty() && !started) {

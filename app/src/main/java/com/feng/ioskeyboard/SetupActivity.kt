@@ -1,38 +1,32 @@
 package com.feng.ioskeyboard
 
-import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
-import android.provider.Settings
-import android.view.inputmethod.InputMethodManager
-import android.widget.TextView
 
 class SetupActivity : Activity() {
-    private lateinit var vEnable: TextView
-    private lateinit var vPick: TextView
-    private lateinit var vMic: TextView
-
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        val pf = getSharedPreferences("kb", Context.MODE_PRIVATE)
+        // pertama kali dibuka: tampilkan setup animasi
+        if (!pf.getBoolean("onboarded", false)) {
+            startActivity(Intent(this, OnboardActivity::class.java)); finish(); return
+        }
         val pal = palette()
         val ui = Screen(this, pal)
-        val pf = getSharedPreferences("kb", Context.MODE_PRIVATE)
-        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
 
-        ui.title("Keyboard", "iOS Keyboard untuk Android")
+        val name = pf.getString("user_name", "") ?: ""
+        val showHeader = pf.getInt("name_show", 0).let { it == 2 || it == 3 }
+        ui.title("Keyboard", if (showHeader && name.isNotBlank()) "Halo, $name" else "iOS Keyboard untuk Android")
 
-        ui.section("Mulai")
-        vEnable = ui.valueText(""); vPick = ui.valueText(""); vMic = ui.valueText("")
+        ui.section("Profil")
         ui.card(
-            ui.navRow("Aktifkan keyboard", vEnable) { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) },
-            ui.navRow("Pilih keyboard", vPick) { imm.showInputMethodPicker() },
-            ui.navRow("Izinkan mikrofon", vMic) { requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1) },
-            ui.navRow("Stiker") { startActivity(Intent(this, StickerActivity::class.java)) }
+            ui.inputRow("Nama kamu", name) { pf.edit().putString("user_name", it.trim()).apply() },
+            ui.segmentRow("Tampilkan nama di", arrayOf("Tidak", "Spasi", "Header", "Keduanya"), pf.getInt("name_show", 0)) { pf.edit().putInt("name_show", it).apply() }
         )
+        ui.footer("Nama muncul di tombol spasi keyboard dan/atau di bagian atas halaman ini.")
 
         ui.section("Tampilan")
         ui.card(
@@ -53,6 +47,12 @@ class SetupActivity : Activity() {
             ui.switchRow("Bar bawah ikut warna keyboard", pf, "nav_follow")
         )
 
+        ui.section("Alat")
+        ui.card(
+            ui.navRow("Stiker") { startActivity(Intent(this, StickerActivity::class.java)) },
+            ui.navRow("Ulangi setup awal") { pf.edit().putBoolean("onboarded", false).apply(); startActivity(Intent(this, OnboardActivity::class.java)); finish() }
+        )
+
         ui.section("Clipboard")
         ui.card(
             ui.switchRow("Simpan riwayat clipboard", pf, "clip_on"),
@@ -65,15 +65,18 @@ class SetupActivity : Activity() {
             }
         )
         ui.footer("Riwayat clipboard dan kata yang kamu ketik hanya disimpan di perangkat ini.")
-        ui.show()
-    }
 
-    override fun onResume() {
-        super.onResume()
-        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_INPUT_METHODS) ?: ""
-        val current = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD) ?: ""
-        vEnable.text = if (enabled.contains(packageName)) "Aktif" else "Belum"
-        vPick.text = if (current.contains(packageName)) "Dipakai" else ""
-        vMic.text = if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) "Diizinkan" else "Belum"
+        ui.section("Emoji buatan")
+        ui.card(
+            ui.actionRow("Hapus semua emoji buatan", pal.red) {
+                AlertDialog.Builder(this)
+                    .setTitle("Hapus semua emoji buatan?")
+                    .setMessage("Emoji gabungan yang disimpan di tab Terbaru akan dihapus. Stiker tidak ikut dihapus.")
+                    .setPositiveButton("Hapus") { _, _ -> GenStore.clear(this) }
+                    .setNegativeButton("Batal", null).show()
+            }
+        )
+        ui.footer("Buat emoji gabungan: ketik dua emoji lalu ketuk Gabungkan, atau pakai tombol Gabung di panel emoji.")
+        ui.show()
     }
 }
