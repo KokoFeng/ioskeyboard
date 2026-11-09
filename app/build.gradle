@@ -1,0 +1,55 @@
+import java.security.KeyStore
+import java.security.MessageDigest
+
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+// Kunci tanda tangan TETAP (disimpan di proyek) supaya setiap build punya tanda tangan sama.
+// Dengan begitu aplikasi bisa di-update tanpa menghapus versi lama.
+// versionCode naik otomatis (menit sejak 1970) agar update selalu dianggap versi lebih baru
+def vc = (int) (System.currentTimeMillis() / 60000L)
+def keystoreFile = file("debug.keystore")
+def certSha256 = {
+    def ks = KeyStore.getInstance(keystoreFile, "android".toCharArray())
+    def cert = ks.getCertificate("androiddebugkey")
+    MessageDigest.getInstance("SHA-256").digest(cert.getEncoded()).collect { String.format("%02x", it) }.join()
+}
+
+android {
+    namespace 'com.feng.ioskeyboard'
+    compileSdk 34
+    defaultConfig {
+        applicationId "com.feng.ioskeyboard"
+        minSdk 24
+        targetSdk 34
+        versionCode vc
+        versionName "1.0"
+        buildConfigField "String", "SIG_SHA256", "\"${certSha256()}\""
+    }
+    signingConfigs {
+        debug {
+            storeFile keystoreFile
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
+    }
+    buildFeatures { buildConfig true }
+    androidResources {
+        noCompress 'ttf', 'wav', 'ogg', 'mp3'
+    }
+    buildTypes {
+        debug { signingConfig signingConfigs.debug }
+        release { minifyEnabled false; signingConfig signingConfigs.debug }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+}
+dependencies {
+    implementation 'androidx.core:core-ktx:1.12.0'
+}

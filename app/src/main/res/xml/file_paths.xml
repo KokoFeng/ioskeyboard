@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path name="stickers" path="stickers/" />
+    <files-path name="clip" path="clip/" />
+    <files-path name="genmoji" path="genmoji/" />
+    <files-path name="gshare" path="gshare/" />
+</paths>

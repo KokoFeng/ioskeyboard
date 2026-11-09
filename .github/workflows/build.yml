@@ -1,0 +1,58 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+
+      # Gradle diunduh sendiri dengan percobaan ulang + dua mirror, supaya error sesaat
+      # (mis. HTTP 504 dari server Gradle) tidak menggagalkan build.
+      - name: Cache distribusi Gradle
+        id: gdist
+        uses: actions/cache@v4
+        with:
+          path: ~/gradle-dist
+          key: gradle-8.5-bin-v1
+
+      - name: Unduh Gradle 8.5 (dengan retry)
+        if: steps.gdist.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/gradle-dist
+          ok=0
+          for n in 1 2 3 4 5 6 7 8; do
+            for url in https://services.gradle.org/distributions/gradle-8.5-bin.zip https://downloads.gradle.org/distributions/gradle-8.5-bin.zip; do
+              rm -f ~/gradle-dist/gradle.zip
+              if curl -fL --connect-timeout 20 --max-time 300 -o ~/gradle-dist/gradle.zip "$url" && unzip -tq ~/gradle-dist/gradle.zip >/dev/null 2>&1; then ok=1; break 2; fi
+              echo "Gagal mengunduh dari $url (percobaan $n), mencoba lagi..."
+              sleep 12
+            done
+          done
+          test "$ok" = "1"
+
+      - name: Pasang Gradle
+        run: |
+          unzip -q ~/gradle-dist/gradle.zip -d ~
+          echo "$HOME/gradle-8.5/bin" >> "$GITHUB_PATH"
+
+      - name: Cache paket Gradle
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/caches
+          key: gradle-caches-${{ hashFiles('**/*.gradle') }}
+          restore-keys: gradle-caches-
+
+      # dua kali percobaan: unduhan dependensi juga bisa gagal sesaat
+      - name: Build APK
+        run: gradle assembleDebug --no-daemon || (sleep 20 && gradle assembleDebug --no-daemon)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IosKeyboard-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
