@@ -19,11 +19,11 @@ def certSha256 = {
 
 android {
     namespace 'com.feng.ioskeyboard'
-    compileSdk 35
+    compileSdk 36
     defaultConfig {
         applicationId "com.feng.ioskeyboard"
         minSdk 24
-        targetSdk 35
+        targetSdk 36
         versionCode vc
         versionName "1.0"
         buildConfigField "String", "SIG_SHA256", "\"${certSha256()}\""
