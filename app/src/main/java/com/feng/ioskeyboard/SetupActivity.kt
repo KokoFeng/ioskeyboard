@@ -42,8 +42,10 @@ class SetupActivity : Activity() {
         ui.section(Lang.tr("Tampilan"))
         ui.card(
             ui.segmentRow(Lang.tr("Tema"), arrayOf(Lang.tr("Gelap"), Lang.tr("Terang"), Lang.tr("Sistem")), pf.getInt("theme", 0)) { pf.edit().putInt("theme", it).apply() },
+            ui.segmentRow(Lang.tr("Gaya font"), arrayOf(Lang.tr("Reguler"), "Bold"), pf.getInt("font_style", 0)) { pf.edit().putInt("font_style", it).apply(); window.decorView.post { recreate() } },
             ui.segmentRow(Lang.tr("Ikon kiri bawah"), arrayOf("Globe", "Emoji"), pf.getInt("left_icon", 0)) { pf.edit().putInt("left_icon", it).apply() },
             ui.sliderRow(Lang.tr("Tinggi keyboard"), pf, "kb_h", 85, 110, 100, "%"),
+            ui.sliderRow(Lang.tr("Tinggi saran teks"), pf, "sug_h", 70, 140, 100, "%"),
             ui.sliderRow(Lang.tr("Tinggi kolom pencarian emoji"), pf, "search_h", 70, 120, 100, "%"),
             ui.sliderRow(Lang.tr("Posisi ikon globe & mic"), pf, "icon_y", -60, 60, 0),
             ui.sliderRow(Lang.tr("Ukuran ikon globe & mic"), pf, "icon_sz", 60, 140, 100, "%")
@@ -60,11 +62,11 @@ class SetupActivity : Activity() {
         )
 
         ui.section(Lang.tr("Bahasa keyboard"))
-        ui.card(*Array(5) { i ->
+        ui.card(*Array(Langs.NAMES.size) { i ->
             ui.toggleRow(Langs.NAMES[i], (Langs.mask(this) and (1 shl i)) != 0) { on ->
                 var m = Langs.mask(this)
                 m = if (on) m or (1 shl i) else m and (1 shl i).inv()
-                pf.edit().putInt("lang_mask", if (m and 31 == 0) 31 else m and 31).apply()
+                pf.edit().putInt("lang_mask", if (m and Langs.ALL == 0) Langs.ALL else m and Langs.ALL).apply()
             }
         })
         ui.footer(Lang.tr("Ketuk globe untuk berganti bahasa ketikan. Tekan lama globe untuk memilih langsung."))

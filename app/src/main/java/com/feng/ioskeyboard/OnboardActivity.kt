@@ -155,7 +155,7 @@ class OnboardActivity : Activity() {
         val bottom = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
         primary = TextView(this).apply {
             textSize = 17f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            typeface = Fonts.medium(this@OnboardActivity)
             background = GradientDrawable().apply { setColor(pal.accent); cornerRadius = dp(14f) }
             setPadding(0, dp(16f).toInt(), 0, dp(16f).toInt())
             setOnTouchListener { v, e ->
@@ -236,13 +236,14 @@ class OnboardActivity : Activity() {
         wrap.addView(g, FrameLayout.LayoutParams(-2, -2).apply { setMargins(0, dp(10f).toInt(), dp(10f).toInt(), 0) })
         val badge = Badge(this).apply { visibility = View.INVISIBLE }
         wrap.addView(badge, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END))
-        val t = TextView(this).apply { text = title; textSize = 28f; setTextColor(pal.text); gravity = Gravity.CENTER; typeface = Typeface.create("sans-serif", Typeface.BOLD) }
-        val bd = TextView(this).apply { text = body; textSize = 16f; setTextColor(pal.sub); gravity = Gravity.CENTER; setLineSpacing(0f, 1.15f) }
+        val t = TextView(this).apply { text = title; textSize = 28f; setTextColor(pal.text); gravity = Gravity.CENTER; typeface = Fonts.heavy(this@OnboardActivity) }
+        val bd = TextView(this).apply { text = body; textSize = 16f; setTextColor(pal.sub); gravity = Gravity.CENTER; setLineSpacing(0f, 1.15f); typeface = Fonts.main(this@OnboardActivity) }
         col.addView(wrap, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(40f).toInt() })
         col.addView(t, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(30f).toInt() })
         col.addView(bd, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12f).toInt() })
         if (extra != null) col.addView(extra, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(26f).toInt() })
-        return Page(col, g, badge, t, bd, extra)
+        val sv = android.widget.ScrollView(this).apply { addView(col); isFillViewport = true; overScrollMode = View.OVER_SCROLL_NEVER; isVerticalScrollBarEnabled = false }
+        return Page(sv, g, badge, t, bd, extra)
     }
 
     private fun nameExtra(): View {

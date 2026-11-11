@@ -137,6 +137,7 @@ object Lang {
         "Belah dua" to "Split", "Aksesori di kepala" to "Accessory on head", "Berdampingan" to "Side by side", "Di sudut" to "In the corner",
         "Campur" to "Blend", "Ekspresi menyatu" to "Merged expression",
         "Bahasa berlaku untuk aplikasi dan tampilan keyboard." to "The language applies to the app and the keyboard interface.",
+        "Gaya font" to "Font style", "Reguler" to "Regular", "Tinggi saran teks" to "Suggestion bar height",
         "Bahasa keyboard" to "Keyboard languages",
         "Ketuk globe untuk berganti bahasa ketikan. Tekan lama globe untuk memilih langsung." to "Tap the globe to switch the typing language. Press and hold the globe to pick one directly.",
         "Bahasa" to "Language",

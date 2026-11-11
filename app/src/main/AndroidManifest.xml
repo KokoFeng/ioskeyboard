@@ -5,7 +5,9 @@
     <queries>
         <intent><action android:name="android.speech.RecognitionService" /></intent>
     </queries>
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <application
+        android:supportsRtl="true"
         android:name=".App"
         android:label="KeyOS"
         android:icon="@mipmap/ic_launcher"

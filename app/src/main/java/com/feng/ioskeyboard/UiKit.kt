@@ -193,7 +193,7 @@ class Screen(private val act: Activity, val pal: Palette) {
 
     fun title(t: String, sub: String? = null) {
         list.addView(TextView(ctx).apply {
-            text = t; setTextColor(pal.text); textSize = 34f; typeface = Typeface.create("sans-serif", Typeface.BOLD)
+            text = t; setTextColor(pal.text); textSize = 34f; typeface = Fonts.heavy(ctx)
         }, lpH(24f, 20f))
         if (sub != null) list.addView(TextView(ctx).apply { text = sub; setTextColor(pal.sub); textSize = 15f }, lpH(2f, 20f))
     }
@@ -240,7 +240,7 @@ class Screen(private val act: Activity, val pal: Palette) {
         minimumHeight = ctx.dp(52f).toInt(); setPadding(ctx.dp(16f).toInt(), ctx.dp(8f).toInt(), ctx.dp(16f).toInt(), ctx.dp(8f).toInt())
     }
 
-    private fun label(t: String, color: Int = pal.text) = TextView(ctx).apply { text = t; setTextColor(color); textSize = 17f }
+    private fun label(t: String, color: Int = pal.text) = TextView(ctx).apply { text = t; setTextColor(color); textSize = 17f; typeface = Fonts.main(ctx) }
 
     /** Baris navigasi: judul, nilai opsional di kanan, panah. */
     fun navRow(t: String, value: TextView? = null, color: Int = pal.text, action: () -> Unit): View {
@@ -264,7 +264,7 @@ class Screen(private val act: Activity, val pal: Palette) {
         return r
     }
 
-    fun valueText(t: String) = TextView(ctx).apply { text = t; setTextColor(pal.sub); textSize = 17f }
+    fun valueText(t: String) = TextView(ctx).apply { text = t; setTextColor(pal.sub); textSize = 17f; typeface = Fonts.main(ctx) }
 
     fun actionRow(t: String, color: Int, action: () -> Unit): View {
         val r = rowBase(); r.addView(label(t, color), LinearLayout.LayoutParams(0, -2, 1f)); pressable(r, action); return r
@@ -320,7 +320,7 @@ class Screen(private val act: Activity, val pal: Palette) {
     fun primaryButton(t: String, action: () -> Unit) {
         val b = TextView(ctx).apply {
             text = t; setTextColor(Color.WHITE); textSize = 17f; gravity = Gravity.CENTER
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            typeface = Fonts.medium(ctx)
             background = GradientDrawable().apply { setColor(pal.accent); cornerRadius = ctx.dp(14f) }
             setPadding(0, ctx.dp(15f).toInt(), 0, ctx.dp(15f).toInt())
             setOnTouchListener { v, e ->

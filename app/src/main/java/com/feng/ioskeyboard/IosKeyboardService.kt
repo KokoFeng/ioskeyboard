@@ -120,10 +120,10 @@ class IosKeyboardService : InputMethodService(), KeyboardView.Listener {
     private fun loadPredictor() {
         val lang = Langs.cur(this)
         Thread {
-            val files = arrayOf("words_id.txt", "words_en.txt", "words_es.txt", "words_ar.txt", "words_ru.txt")
+            val files = Langs.FILES
             val lists = files.map { readWords(it) }
             // bahasa terpilih diutamakan; bahasa lain tetap dikenali (tidak dianggap salah ketik)
-            val order = listOf(lang) + (0..4).filter { it != lang }
+            val order = listOf(lang) + Langs.NAMES.indices.filter { it != lang }
             val p = Predictor(order.flatMap { lists[it] })
             p.startWords = Langs.START[lang]
             p.load(learnFile)

@@ -83,6 +83,12 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     private var bottomInset = 0
     private var scale = 1f
     private var hf = 1f
+    private var userHf = 1f
+    private var land = false
+    private var landOff = 0f
+    private var tf = 1f
+    private var sugDelta = 0f
+    private fun ts(v: Float) = v * tf
     private var iconDy = 0f
     private var iconSz = 1f
     private var oneHand = 0 // 0 normal, 1 kiri, 2 kanan
@@ -247,8 +253,10 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         val nsz = prefs.getInt("icon_sz", 100) / 100f
         oneHand = prefs.getInt("onehand", 0)
         val nle = prefs.getInt("left_icon", 0) == 1
-        if (nhf != hf || ndy != iconDy || nsz != iconSz || nle != leftEmoji) {
-            hf = nhf; iconDy = ndy; iconSz = nsz; leftEmoji = nle
+        val nsd = (prefs.getInt("sug_h", 100) - 100) * 0.8f
+        pTxt.typeface = Fonts.main(context)
+        if (nhf != userHf || ndy != iconDy || nsz != iconSz || nle != leftEmoji || nsd != sugDelta) {
+            userHf = nhf; hf = nhf * (if (land) 0.5f else 1f); iconDy = ndy; iconSz = nsz; leftEmoji = nle; sugDelta = nsd
             keysCache.clear()
             requestLayout()
         }
@@ -256,7 +264,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     }
 
     // ---------- tata letak ----------
-    private fun ky(y: Float) = y * hf
+    private fun ky(y: Float) = (y + sugDelta) * hf
     private fun kh() = 120f * hf
     private fun iconCy() = ky(838f) + iconDy
 
@@ -371,10 +379,10 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     private fun maxScroll(): Float {
         if (page == 4) {
             val cols = ceil(clipItems.size / clipRows().toFloat())
-            return max(0f, cols * (clipCardW() + 14f) * scale - width + 20f * scale)
+            return max(0f, cols * (clipCardW() + 14f) * scale - DW * scale + 20f * scale)
         }
         val cols = ceil(itemCount() / gridRows().toFloat())
-        return max(0f, cols * cellW() * scale - width + 20f * scale)
+        return max(0f, cols * cellW() * scale - DW * scale + 20f * scale)
     }
 
     fun reloadStickers() {
@@ -401,8 +409,21 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     // ---------- ukuran ----------
     override fun onMeasure(wSpec: Int, hSpec: Int) {
         val w = MeasureSpec.getSize(wSpec)
-        scale = w / DW
-        val h = (DH * hf * scale).toInt() + bottomInset
+        val isLand = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        if (isLand != land) {
+            land = isLand
+            hf = userHf * (if (land) 0.5f else 1f)
+            tf = if (land) 0.62f else 1f
+            keysCache.clear()
+        }
+        if (land) {
+            // landscape: keyboard pendek (maks. setengah tinggi layar), lebar mengikuti, diletakkan di tengah
+            val maxH = resources.displayMetrics.heightPixels * 0.5f
+            val sMax = (maxH - bottomInset) / ((DH + sugDelta) * hf)
+            scale = min(sMax, w / DW)
+            landOff = max(0f, (w - DW * scale) / 2f)
+        } else { scale = w / DW; landOff = 0f }
+        val h = ((DH + sugDelta) * hf * scale).toInt() + bottomInset
         setMeasuredDimension(w, h)
     }
 
@@ -441,7 +462,9 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         rf.set(0f, 0f, width.toFloat(), height.toFloat() + 80f)
         c.drawRoundRect(rf, 64f * s, 64f * s, pKey)
 
-        if (oneHand != 0) { c.save(); c.translate(oneOff(), 0f); c.scale(ONE_F, 1f) }
+        val oh = oneHand != 0 && !land
+        if (oh) { c.save(); c.translate(oneOff(), 0f); c.scale(ONE_F, 1f) }
+        if (land) { c.save(); c.translate(landOff, 0f) }
         c.save(); c.scale(s, s)
         if (page == 3) {
             drawEmojiTop(c)
@@ -464,7 +487,8 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             if (prevItem != null) drawPreview(c)
         }
         c.restore()
-        if (oneHand != 0) { c.restore(); drawOneHandButton(c) }
+        if (land) c.restore()
+        if (oh) { c.restore(); drawOneHandButton(c) }
     }
 
     private fun drawOneHandButton(c: Canvas) {
@@ -492,7 +516,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         c.drawRoundRect(rf, (bottom - top) / 2, (bottom - top) / 2, pKey)
         val cy = (top + bottom) / 2
         drawMagnifier(c, left + 44f, cy)
-        pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = 44f
+        pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = ts(44f)
         if (query.isEmpty()) { pTxt.color = cHint; c.drawText(Lang.tr("Cari Emoji"), left + 84f, cy + 15f, pTxt) }
         else {
             pTxt.color = cFg
@@ -522,7 +546,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         rf.set(left, top, right, bottom); c.drawRoundRect(rf, (bottom - top) / 2, (bottom - top) / 2, pKey)
         val cy = (top + bottom) / 2
         val iconW = 46f
-        pTxt.textSize = 38f; pTxt.color = cFg
+        pTxt.textSize = ts(38f); pTxt.color = cFg
         val tw = pTxt.measureText(label)
         val total = iconW + 12f + tw
         val x0 = (left + right) / 2 - total / 2
@@ -540,9 +564,9 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             // pill pilihan: menampilkan dua emoji yang sudah dipilih
             pKey.color = cPill; rf.set(20f, top, 790f, bot); c.drawRoundRect(rf, (bot - top) / 2, (bot - top) / 2, pKey)
             val cy = (top + bot) / 2
-            pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = 38f; pTxt.color = cHint
+            pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = ts(38f); pTxt.color = cHint
             c.drawText(if (combineSel.isEmpty()) Lang.tr("Pilih dua emoji…") else Lang.tr("Pilih satu lagi…"), 54f, cy + 13f, pTxt)
-            pEmoji.textSize = 56f
+            pEmoji.textSize = ts(56f)
             for (i in combineSel.indices) c.drawText(combineSel[i], 640f + i * 76f, cy + 21f, pEmoji)
             pTxt.textAlign = Paint.Align.CENTER; pTxt.color = cFg
             drawGenButton(c, top, bot, 810f, 1060f, Lang.tr("Batal"))
@@ -556,7 +580,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         val ph = 74f * searchScale
         drawPill(c, 10f, 10f + ph)
         val res = searchRes()
-        pEmoji.textSize = 50f
+        pEmoji.textSize = ts(50f)
         val sy = 10f + ph + 10f
         for (i in 0 until min(res.size, 10)) c.drawText(res[i], 20f + i * 104f + 52f, sy + 40f, pEmoji)
     }
@@ -586,7 +610,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             }
         } else {
             val items = gridItems()
-            pEmoji.textSize = 93f
+            pEmoji.textSize = ts(93f)
             for (col in first..last) for (r in 0 until rows) {
                 val idx = col * rows + r
                 if (idx >= items.size) continue
@@ -598,7 +622,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
                 } else c.drawText(repo.shown(it0), ccx, ccy + 33f, pEmoji)
             }
             if (items.isEmpty()) {
-                pTxt.color = cHint; pTxt.textSize = 40f
+                pTxt.color = cHint; pTxt.textSize = ts(40f)
                 c.drawText(if (query.isNotEmpty()) Lang.tr("Tidak ada hasil") else if (tab == 1) Lang.tr("Belum ada emoji terbaru") else Lang.tr("Memuat emoji…"), 540f, top + 200f, pTxt)
                 pTxt.color = cFg
             }
@@ -613,7 +637,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             val sel = query.isEmpty() && i == tab
             if (sel) { pKey.color = cTabSel; c.drawCircle(cx, cy, 40f, pKey) }
             // kanvas ikon jam 60px (penuh), ikon lain 120px (berpadding): disamakan ke ukuran iOS asli
-            val half = if (i == 1) 22f else 46.8f
+            val half = (if (i == 1) 22f else 46.8f) * tf
             pTint.colorFilter = PorterDuffColorFilter(if (sel) cFg else cHint, PorterDuff.Mode.SRC_IN)
             rf.set(cx - half, cy - half, cx + half, cy + half)
             c.drawBitmap(catBmps[i], null, rf, pTint)
@@ -622,9 +646,9 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     }
 
     private fun drawSuggestions(c: Canvas) {
-        val cy = ky(110f)
+        val cy = 0.6f * (182f + sugDelta) * hf
         if (combineBtn != null) {
-            pTxt.textSize = 44f; pTxt.color = cFg
+            pTxt.textSize = ts(44f); pTxt.color = cFg
             drawGenIcon(c, 440f, cy, cFg)
             pTxt.textAlign = Paint.Align.LEFT
             c.drawText(Lang.tr("Gabungkan"), 486f, cy + 15f, pTxt)
@@ -635,7 +659,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         c.drawLine(363f, cy - 35f, 363f, cy + 35f, pStroke)
         c.drawLine(716f, cy - 35f, 716f, cy + 35f, pStroke)
         pStroke.color = cFg; pStroke.strokeWidth = 5.5f
-        pTxt.textSize = 48f
+        pTxt.textSize = ts(48f)
         val xs = floatArrayOf(188f, 540f, 892f)
         val t = fadeT(SystemClock.uptimeMillis())
         for (i in 0..2) {
@@ -668,7 +692,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         if (k.kind == K_PLAIN) {
             pTxt.color = if (pressed) cHint else cFg
             if (k.code == DEL) { pStroke.alpha = if (pressed) 120 else 255; drawDelete(c, cx, cy); pStroke.alpha = 255 }
-            else { pTxt.textSize = 46f; c.drawText(k.label, cx, cy + 16f, pTxt) }
+            else { pTxt.textSize = ts(46f); c.drawText(k.label, cx, cy + 16f, pTxt) }
             pTxt.color = cFg
             return
         }
@@ -695,10 +719,10 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         if (blank) return
         pTxt.color = cFg
         when (k.code) {
-            SHIFT -> drawShift(c, cx, cy)
-            DEL -> drawDelete(c, cx, cy)
-            EMOJI -> drawSmiley(c, cx, cy)
-            RET -> if (showReturnArrow) drawArrow(c, cx, cy) else { pTxt.textSize = 44f; c.drawText(returnLabel, cx, cy + 15f, pTxt) }
+            SHIFT -> { c.save(); c.scale(tf, tf, cx, cy); drawShift(c, cx, cy); c.restore() }
+            DEL -> { c.save(); c.scale(tf, tf, cx, cy); drawDelete(c, cx, cy); c.restore() }
+            EMOJI -> { c.save(); c.scale(tf, tf, cx, cy); drawSmiley(c, cx, cy); c.restore() }
+            RET -> if (showReturnArrow) { c.save(); c.scale(tf, tf, cx, cy); drawArrow(c, cx, cy); c.restore() } else { pTxt.textSize = ts(44f); c.drawText(returnLabel, cx, cy + 15f, pTxt) }
             SPACE -> {
                 val fl = SystemClock.uptimeMillis() - langFlashAt
                 val flashing = langFlashAt != 0L && fl < 1600L
@@ -706,7 +730,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
                 val fa = if (flashing && fl > 1200L) (1600L - fl) / 400f else 1f
                 val n = if (flashing) langFlash else if ((nameShow == 1 || nameShow == 3) && userName.isNotBlank()) userName else ""
                 if (n.isNotEmpty()) {
-                    pTxt.textSize = 34f; pTxt.color = cHint; pTxt.alpha = (255 * fa).toInt()
+                    pTxt.textSize = ts(34f); pTxt.color = cHint; pTxt.alpha = (255 * fa).toInt()
                     var t = n; while (pTxt.measureText(t) > 440f && t.length > 3) t = t.dropLast(1)
                     pTxt.textSkewX = -Math.tan(Math.toRadians(nameSkew.toDouble())).toFloat()
                     c.save(); c.rotate(nameRot.toFloat(), cx, cy)
@@ -715,9 +739,9 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
                     pTxt.textSkewX = 0f; pTxt.color = cFg
                 }
             }
-            NUM, ABC, SYM -> { pTxt.textSize = if (k.label.length > 2) 46f else 50f; c.drawText(k.label, cx, cy + 17f, pTxt) }
+            NUM, ABC, SYM -> { pTxt.textSize = ts(if (k.label.length > 2) 46f else 50f); c.drawText(k.label, cx, cy + 17f, pTxt) }
             else -> {
-                pTxt.textSize = 58f
+                pTxt.textSize = ts(58f)
                 val t = if (page == 0 && shift != 0) k.label else if (page == 0) k.label.lowercase() else k.label
                 c.drawText(t, cx, cy + 20f, pTxt)
             }
@@ -734,13 +758,13 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
             else -> null
         }
         if (k.code == EMOJI) {
-            val h = 38f * iconSz
+            val h = 38f * iconSz * tf
             rf.set(cx - h, cy - h, cx + h, cy + h); c.drawBitmap(if (light) kbEmojiBlack else kbEmojiWhite, null, rf, pBmp)
         } else if (k.code == GLOBE) {
-            val h = 37f * iconSz
+            val h = 37f * iconSz * tf
             rf.set(cx - h, cy - h, cx + h, cy + h); c.drawBitmap(globe, null, rf, pBmp)
         } else {
-            val hw = 24f * iconSz; val hh = 40f * iconSz
+            val hw = 24f * iconSz * tf; val hh = 40f * iconSz * tf
             rf.set(cx - hw, cy - hh, cx + hw, cy + hh); c.drawBitmap(mic, null, rf, pBmp)
         }
         pBmp.colorFilter = null
@@ -790,7 +814,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         c.drawRoundRect(rf, 30f, 30f, pKey)
         rf.set(k.x, top + bh - 40f, k.x + k.w, k.y + k.h)
         c.drawRoundRect(rf, 21f, 21f, pKey)
-        pTxt.color = cFg; pTxt.textSize = 86f
+        pTxt.color = cFg; pTxt.textSize = ts(86f)
         val t = if (page == 0 && shift == 0) k.label.lowercase() else k.label
         c.drawText(t, left + bw / 2, top + bh * 0.55f + 28f, pTxt)
     }
@@ -810,7 +834,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         if (cShadow != 0) { pKey.color = cShadow; rf.set(MENU_L, top + 4f, MENU_L + MENU_W, menuBottom() + 4f); c.drawRoundRect(rf, 56f, 56f, pKey) }
         pKey.color = cMenuBg
         rf.set(MENU_L, top, MENU_L + MENU_W, menuBottom()); c.drawRoundRect(rf, 56f, 56f, pKey)
-        pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = if (mr < 88f) 36f else 44f
+        pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = ts(if (mr < 88f) 36f else 44f)
         for ((i, code) in model.withIndex()) {
             val y0 = top + 14f + i * mr
             if (code == 6) {
@@ -968,7 +992,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     // ---- emoji besar (tekan-tahan) ----
     private fun toScreen(x: Float, y: Float): Pair<Int, Int> {
         val loc = IntArray(2); getLocationOnScreen(loc)
-        val sx = if (oneHand != 0) loc[0] + oneOff() + x * ONE_F else loc[0] + x
+        val sx = if (land) loc[0] + landOff + x else if (oneHand != 0) loc[0] + oneOff() + x * ONE_F else loc[0] + x
         return Pair(sx.toInt(), (loc[1] + y).toInt())
     }
 
@@ -1030,7 +1054,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         if (toneBase == null) return
         if (cShadow != 0) { pKey.color = cShadow; rf.set(toneRect.left, toneRect.top + 4f, toneRect.right, toneRect.bottom + 4f); c.drawRoundRect(rf, 44f, 44f, pKey) }
         pKey.color = cMenuBg; c.drawRoundRect(toneRect, 44f, 44f, pKey)
-        pEmoji.textSize = 62f
+        pEmoji.textSize = ts(62f)
         for (i in toneVars.indices) {
             val cx = toneRect.left + 12f + i * 88f + 44f
             if (i == toneHover) { pKey.color = cMenuSel; rf.set(cx - 40f, toneRect.top + 10f, cx + 40f, toneRect.bottom - 10f); c.drawRoundRect(rf, 36f, 36f, pKey) }
@@ -1065,7 +1089,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         if (!accentActive) return
         if (cShadow != 0) { pKey.color = cShadow; rf.set(accentRect.left, accentRect.top + 4f, accentRect.right, accentRect.bottom + 4f); c.drawRoundRect(rf, 36f, 36f, pKey) }
         pKey.color = cMenuBg; c.drawRoundRect(accentRect, 36f, 36f, pKey)
-        pTxt.textSize = 58f
+        pTxt.textSize = ts(58f)
         for (i in accentList.indices) {
             val cx = accentRect.left + 12f + i * 86f + 43f
             if (i == accentHover) { pKey.color = cBlue; rf.set(cx - 38f, accentRect.top + 10f, cx + 38f, accentRect.bottom - 10f); c.drawRoundRect(rf, 30f, 30f, pKey) }
@@ -1204,7 +1228,14 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
-        if (oneHand == 0) return touch(e)
+        if (oneHand == 0 || land) {
+            if (landOff <= 0f) return touch(e)
+            val ev0 = MotionEvent.obtain(e)
+            ev0.offsetLocation(-landOff, 0f)
+            val r0 = touch(ev0)
+            ev0.recycle()
+            return r0
+        }
         val off = oneOff(); val w = width * ONE_F
         val a = e.actionMasked
         if (a == MotionEvent.ACTION_DOWN || a == MotionEvent.ACTION_POINTER_DOWN) {
@@ -1301,7 +1332,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
                     } else if (combineBtn != null) {
                         tap(); combineBtn?.let { l.onCombine(it.first, it.second) }
                     } else {
-                        val slot = (x / (width / 3f)).toInt().coerceIn(0, 2)
+                        val slot = (x / (DW * scale / 3f)).toInt().coerceIn(0, 2)
                         if (sug[slot].isNotEmpty()) { tap(); l.onSuggestion(slot) }
                     }
                     return true
@@ -1442,7 +1473,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         rf.set(20f + clipTab * sw + 5f, top + 5f, 20f + (clipTab + 1) * sw - 5f, top + h - 5f)
         c.drawRoundRect(rf, (h - 10f) / 2, (h - 10f) / 2, pKey)
         val labels = arrayOf(Lang.tr("Teks"), Lang.tr("Gambar"), Lang.tr("Prompt"))
-        pTxt.textSize = 38f
+        pTxt.textSize = ts(38f)
         for (i in 0..2) { pTxt.color = if (i == clipTab) cFg else cHint; c.drawText(labels[i], 20f + i * sw + sw / 2, top + h / 2 + 13f, pTxt) }
         pTxt.color = cFg
 
@@ -1450,7 +1481,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         c.save(); c.clipRect(0f, tp0 - 4f, DW, clipBottom() + 6f)
         val off = scrollPx / s
         if (clipItems.isEmpty()) {
-            pTxt.color = cHint; pTxt.textSize = 38f
+            pTxt.color = cHint; pTxt.textSize = ts(38f)
             val msg = when (clipTab) { 0 -> Lang.tr("Belum ada teks yang disalin"); 1 -> Lang.tr("Belum ada gambar yang disalin"); else -> Lang.tr("Belum ada teks panjang yang disalin") }
             c.drawText(msg, 540f, tp0 + 250f, pTxt); pTxt.color = cFg
         }
@@ -1613,7 +1644,7 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
         rf.set(pvPin.left, pvPin.top, pvPin.right, pvDel.bottom)
         pKey.color = cMenuBg; c.drawRoundRect(rf, 44f, 44f, pKey)
         pKey.color = cDiv; c.drawRect(pvPin.left + 30f, pvPin.bottom - 1f, pvPin.right - 30f, pvPin.bottom + 1f, pKey)
-        pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = 42f
+        pTxt.textAlign = Paint.Align.LEFT; pTxt.textSize = ts(42f)
         pTxt.color = cFg
         c.drawText(if (it.pinned) Lang.tr("Lepas sematan") else Lang.tr("Sematkan"), pvPin.left + 44f, pvPin.centerY() + 15f, pTxt)
         val red = if (light) 0xFFFF3B30.toInt() else 0xFFFF453A.toInt()
@@ -1676,8 +1707,8 @@ class KeyboardView(ctx: Context, private val l: Listener) : View(ctx) {
 
     private fun invalidateKey(k: Key) {
         val s = scale
-        invalidate(((k.x - 140f) * s).toInt().coerceAtLeast(0), ((k.y - 220f) * s).toInt().coerceAtLeast(0),
-            ((k.x + k.w + 140f) * s).toInt(), ((k.y + k.h + 20f) * s).toInt())
+        invalidate(((k.x - 140f) * s + landOff).toInt().coerceAtLeast(0), ((k.y - 220f) * s).toInt().coerceAtLeast(0),
+            ((k.x + k.w + 140f) * s + landOff).toInt(), ((k.y + k.h + 20f) * s).toInt())
     }
 
     private fun commit(k: Key) {
