@@ -1,0 +1,20 @@
+{
+  "allFiles": [
+    {
+      "file": "/storage/emulated/0/Download/IosKeyboard/app/build.gradle",
+      "selection": {
+        "end": {
+          "column": 111,
+          "index": 756,
+          "line": 16
+        },
+        "start": {
+          "column": 4,
+          "index": 597,
+          "line": 15
+        }
+      }
+    }
+  ],
+  "selectedFile": "/storage/emulated/0/Download/IosKeyboard/app/build.gradle"
+}
