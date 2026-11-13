@@ -16,11 +16,8 @@ class SetupActivity : Activity() {
         Lang.load(this)
         if (Guard.blockIfTampered(this)) { blocked = true; return }
         builtEn = Lang.en
+        CrashReporter.showIfAny(this)
         val pf = getSharedPreferences("kb", Context.MODE_PRIVATE)
-        // pertama kali dibuka: tampilkan setup animasi
-        if (!pf.getBoolean("onboarded", false)) {
-            startActivity(Intent(this, OnboardActivity::class.java)); finish(); return
-        }
         val pal = palette()
         val ui = Screen(this, pal)
 
@@ -78,8 +75,7 @@ class SetupActivity : Activity() {
 
         ui.section(Lang.tr("Alat"))
         ui.card(
-            ui.navRow(Lang.tr("Stiker")) { startActivity(Intent(this, StickerActivity::class.java)) },
-            ui.navRow(Lang.tr("Ulangi setup awal")) { pf.edit().putBoolean("onboarded", false).apply(); startActivity(Intent(this, OnboardActivity::class.java)); finish() }
+            ui.navRow(Lang.tr("Stiker")) { startActivity(Intent(this, StickerActivity::class.java)) }
         )
 
         ui.section("Clipboard")

@@ -62,7 +62,7 @@ class EmojiRepo(private val ctx: Context) {
                     }
                 } catch (_: Exception) {}
                 ui.post { onChange?.invoke() }
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {}
             try {
                 val f = File(ctx.filesDir, FONT)
                 if (!f.exists() || f.length() < 1_000_000) {
@@ -78,7 +78,7 @@ class EmojiRepo(private val ctx: Context) {
                 for ((k, v) in byCat) fixed[k] = v.filter { p.hasGlyph(it) }
                 byCat = fixed
                 ui.post { onChange?.invoke() }
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {}
         }.start()
     }
 

@@ -33,7 +33,7 @@
             </intent-filter>
         </activity>
         <activity android:name=".CombineActivity" android:exported="false" android:taskAffinity="" android:excludeFromRecents="true" android:windowSoftInputMode="adjustResize" />
-        <activity android:name=".OnboardActivity" android:exported="false" />
+        <activity android:name=".CrashActivity" android:process=":crash" android:exported="false" android:taskAffinity="" android:excludeFromRecents="true" android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <activity android:name=".LanguageActivity" android:exported="false" />
         <provider android:name="androidx.core.content.FileProvider"
             android:authorities="com.feng.ioskeyboard.files"
